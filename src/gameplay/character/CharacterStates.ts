@@ -26,6 +26,7 @@ export interface ClipResolution {
   clipName: string;
   isNativeClip: boolean;
   reverse?: boolean;
+  loopOnce?: boolean;
 }
 
 /**
@@ -55,14 +56,25 @@ const STATE_CLIP_CANDIDATES: Record<CharacterLocomotionState, string[]> = {
   FlightLand: ['FlightLand', 'Land'],
 };
 
+const ONE_SHOT_STATES = new Set<CharacterLocomotionState>([
+  'JumpStart',
+  'Land',
+  'Attack',
+  'HitReaction',
+  'Death',
+  'FlightTakeoff',
+  'FlightLand',
+]);
+
 export function resolveClipForState(
   state: CharacterLocomotionState,
   availableClips: string[]
 ): ClipResolution {
   const candidates = STATE_CLIP_CANDIDATES[state];
+  const loopOnce = ONE_SHOT_STATES.has(state);
   for (const candidate of candidates) {
     if (availableClips.includes(candidate)) {
-      return { clipName: candidate, isNativeClip: true };
+      return { clipName: candidate, isNativeClip: true, loopOnce };
     }
   }
 

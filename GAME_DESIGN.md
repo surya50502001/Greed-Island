@@ -31,8 +31,17 @@ Instead of a permanent hotbar, pressing `G` materializes an ancient 3D Grimoire 
 - `src/types/game.ts` — Shared constants (`ISLAND_RADIUS`, `WATER_LEVEL`, `INVISIBILITY_DURATION`, `LANDMARKS`, `CARD_DEFINITIONS`).
 - `src/world/terrain.ts` — Deterministic `getTerrainHeight`, `getTerrainColor`, and prop placement.
 - `src/components/World.tsx` & `Landmarks.tsx` — Terrain mesh, ocean, sky/clouds, trees, rocks, and 4 landmarks.
-- `src/components/Player.tsx` — Rigged `Soldier.glb` character (`useGLTF` + `useAnimations`), over-the-shoulder camera, ground/flight physics, weapon attachment & melee hit detection, and pointer-lock release when browsing the Grimoire.
+- `src/gameplay/character/` — Modular character system:
+  - `CharacterStates.ts` — Configurable `DEFAULT_CHARACTER_MODEL_URL`, 19 locomotion/combat/flight states, and `resolveClipForState` (native clip matching + honest fallbacks).
+  - `CharacterController.ts` — Grounded/airborne/flight physics, natural acceleration/deceleration, diagonal normalization, smooth turning, jump/land sync, flight landing transition, and Grimoire input freeze.
+  - `CharacterAnimationController.ts` — Crossfaded `AnimationAction` state machine with speed-matched `timeScale` and one-shot vs. loop handling.
+- `src/components/Player.tsx` — Rigged humanoid character (`Soldier.glb` by default, replaceable via `modelUrl`), over-the-shoulder camera, weapon attachment to `mixamorigRightHand`, and active-window melee hit detection.
 - `src/components/Grimoire.tsx` & `GrimoireCard.tsx` — 3D summonable book, animated cover/pages, particle/rune effects, and interactive holographic cards.
-- `src/components/Enemies.tsx` — Patrol/chase AI and defeat/respawn loop.
+- `src/components/Enemies.tsx` — Patrol/chase AI, player hit callback, and defeat/respawn loop.
 - `src/components/HUD.tsx` — Minimal active-status pills, airborne flight hints, and Grimoire summon prompt (no permanent 3-card hotbar).
 - `src/App.tsx` — Canvas, lighting, `<Suspense>`, card state, and `G` / `Escape` keybindings.
+
+## Animation Asset Status (`Soldier.glb`)
+- **Available clips**: `Idle` (`1.97s`), `Walk` (`1.03s`), `Run` (`0.70s`), `TPose` (`0.03s`).
+- **Native integration**: `Idle`, `Walk`, `Jog`/`Sprint` (speed-matched `Run`).
+- **Pending external GLB clips**: `CombatIdle`, `WalkBackward`, `StrafeLeft`, `StrafeRight`, `JumpStart`, `JumpLoop`, `Fall`, `Land`, `Attack`, `HitReaction`, `Death`, `FlightTakeoff`, `FlightHover`, `FlightForward`, `FlightLand`. Pass a custom Mixamo/Blender GLB with these clip names via `<Player modelUrl="..." />` to enable them automatically.

@@ -33,6 +33,7 @@ export class CharacterController {
 
   private keys: Record<string, boolean> = {};
   private prevIsFlying = false;
+  private pendingFlightLand = false;
 
   // Jump / Land timers
   private jumpAnticipationTimer = 0;
@@ -125,10 +126,16 @@ export class CharacterController {
     // Detect flight toggle transitions
     if (isFlying && !this.prevIsFlying) {
       this.flightTakeoffTimer = 0.28;
+      this.pendingFlightLand = false;
       this.velocity.y = Math.max(this.velocity.y, 4.5);
       this.grounded = false;
     } else if (!isFlying && this.prevIsFlying) {
       this.flightTakeoffTimer = 0;
+      if (!this.grounded) {
+        this.pendingFlightLand = true;
+      } else {
+        this.flightLandTimer = 0.24;
+      }
     }
     this.prevIsFlying = isFlying;
 
@@ -255,11 +262,14 @@ export class CharacterController {
 
       const groundY = getTerrainHeight(this.position.x, this.position.z);
       if (this.position.y <= groundY) {
-        if (!this.grounded && this.velocity.y < -4.5) {
+        if (!this.grounded && (this.velocity.y < -4.5 || this.pendingFlightLand)) {
           this.landRecoveryTimer = 0.16;
-          if (this.prevIsFlying) {
-            this.flightLandTimer = 0.22;
+          if (this.pendingFlightLand) {
+            this.flightLandTimer = 0.26;
+            this.pendingFlightLand = false;
           }
+        } else {
+          this.pendingFlightLand = false;
         }
         this.position.y = groundY;
         this.velocity.y = 0;
@@ -268,9 +278,11 @@ export class CharacterController {
         this.grounded = false;
       }
 
-      // Natural turning: keep facing camera-forward when backing up or strafing
-      if (hasMoveInput) {
-        const camForwardYaw = Math.atan2(this.forwardVec.x, this.forwardVec.z);
+      // Natural turning: face camera-forward during attacks, backward movement, or strafing
+      const camForwardYaw = Math.atan2(-Math.sin(camYaw), -Math.cos(camYaw));
+      if (this.attackTimer > 0) {
+        this.rotateTowards(camForwardYaw, 14.0, safeDt);
+      } else if (hasMoveInput) {
         if (isPureBackward || isPureStrafe) {
           this.rotateTowards(camForwardYaw, 8.5, safeDt);
         } else {

@@ -54,7 +54,7 @@ export function Player({
   const camYawRef = useRef(Math.PI);
   const camPitchRef = useRef(0.14);
   const isDraggingRef = useRef(false);
-  const attackHitRegisteredRef = useRef(false);
+  const hitEnemiesThisAttackRef = useRef<Set<string>>(new Set());
 
   // Reusable camera vectors
   const camTargetRef = useRef(new THREE.Vector3());
@@ -74,8 +74,11 @@ export function Player({
     };
   }, [hitTriggerRef]);
 
-  // Configure shadows and locate mixamorigRightHand bone once loaded
+  // Configure shadows, log available clips, and locate mixamorigRightHand bone once loaded
   useEffect(() => {
+    const clipSummary = animations.map((c) => `${c.name} (${c.duration.toFixed(2)}s)`);
+    console.info('[Character] Loaded model:', modelUrl, '| Clips:', clipSummary);
+
     scene.updateMatrixWorld(true);
     scene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
@@ -93,7 +96,7 @@ export function Player({
       setHandInvScale(1 / (worldScale.x || 1));
       setRightHandBone(hand);
     }
-  }, [scene]);
+  }, [scene, animations, modelUrl]);
 
   // Apply 0.25 opacity to character meshes when [3] Invisibility is active
   useEffect(() => {
@@ -137,6 +140,7 @@ export function Player({
     const ctrl = controllerRef.current;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isGrimoireOpen) return;
       ctrl.setKey(e.code, true);
     };
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -173,7 +177,7 @@ export function Player({
           isDraggingRef.current = true;
         }
         if (ctrl.triggerAttack(hasWeapon, isGrimoireOpen)) {
-          attackHitRegisteredRef.current = false;
+          hitEnemiesThisAttackRef.current.clear();
         }
       } else if (e.button === 2) {
         isDraggingRef.current = true;
@@ -309,13 +313,12 @@ export function Player({
         slashTrailRef.current.rotation.z = -1.1 + p * 2.2;
       }
 
-      if (step.isAttackActiveHitWindow && !attackHitRegisteredRef.current) {
-        attackHitRegisteredRef.current = true;
+      if (step.isAttackActiveHitWindow) {
         const pFwdX = Math.sin(ctrl.yaw);
         const pFwdZ = Math.cos(ctrl.yaw);
 
         for (const enemy of enemiesRef.current) {
-          if (!enemy.alive) continue;
+          if (!enemy.alive || hitEnemiesThisAttackRef.current.has(enemy.id)) continue;
           const dx = enemy.position.x - ctrl.position.x;
           const dy = enemy.position.y - ctrl.position.y;
           const dz = enemy.position.z - ctrl.position.z;
@@ -323,6 +326,7 @@ export function Player({
           if (dist < 4.5 && Math.abs(dy) < 3.5) {
             const dot = (dx * pFwdX + dz * pFwdZ) / (dist || 1);
             if (dist < 2.2 || dot > 0.15) {
+              hitEnemiesThisAttackRef.current.add(enemy.id);
               enemy.hitFlash = 0.18;
               enemy.alive = false;
               enemy.chasing = false;
