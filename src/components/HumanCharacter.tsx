@@ -11,9 +11,8 @@ interface HumanCharacterProps {
 }
 
 /**
- * Stylized, articulated normal human adventurer character.
- * Proportions: ~1.84m tall, boot soles resting at y = 0.
- * Faces +Z in local space.
+ * Free Fire–inspired athletic human survivor character (~1.86m tall).
+ * Boot soles rest cleanly at y = 0. Faces +Z in local space.
  */
 export function HumanCharacter({
   stepRef,
@@ -40,19 +39,37 @@ export function HumanCharacter({
 
   const walkPhaseRef = useRef(0);
 
-  // Shared materials so invisibility opacity applies uniformly
   const materials = useMemo(() => {
-    const skin = new THREE.MeshStandardMaterial({ color: '#f2c4a2', roughness: 0.72 });
-    const hair = new THREE.MeshStandardMaterial({ color: '#2e211b', roughness: 0.82 });
-    const eyeWhite = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.3 });
-    const eyePupil = new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.2 });
-    const shirt = new THREE.MeshStandardMaterial({ color: '#f1f5f9', roughness: 0.85 });
-    const tunic = new THREE.MeshStandardMaterial({ color: '#2b7a4b', roughness: 0.78 });
-    const belt = new THREE.MeshStandardMaterial({ color: '#5c3a21', roughness: 0.7 });
-    const buckle = new THREE.MeshStandardMaterial({ color: '#fbbf24', metalness: 0.65, roughness: 0.3 });
-    const pants = new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.86 });
-    const boots = new THREE.MeshStandardMaterial({ color: '#472d1b', roughness: 0.75 });
-    return { skin, hair, eyeWhite, eyePupil, shirt, tunic, belt, buckle, pants, boots };
+    const skin = new THREE.MeshStandardMaterial({ color: '#eab896', roughness: 0.68 });
+    const hair = new THREE.MeshStandardMaterial({ color: '#1c1917', roughness: 0.78 });
+    const headband = new THREE.MeshStandardMaterial({ color: '#dc2626', roughness: 0.65 });
+    const eyeWhite = new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.25 });
+    const eyePupil = new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.2 });
+    const tee = new THREE.MeshStandardMaterial({ color: '#e2e8f0', roughness: 0.8 });
+    const jacket = new THREE.MeshStandardMaterial({ color: '#1e293b', roughness: 0.72 });
+    const accent = new THREE.MeshStandardMaterial({ color: '#f59e0b', metalness: 0.35, roughness: 0.4 });
+    const glove = new THREE.MeshStandardMaterial({ color: '#18181b', roughness: 0.75 });
+    const belt = new THREE.MeshStandardMaterial({ color: '#27272a', roughness: 0.7 });
+    const cargo = new THREE.MeshStandardMaterial({ color: '#3b423c', roughness: 0.85 });
+    const pad = new THREE.MeshStandardMaterial({ color: '#18181b', roughness: 0.65 });
+    const boot = new THREE.MeshStandardMaterial({ color: '#171717', roughness: 0.72 });
+    const bootSole = new THREE.MeshStandardMaterial({ color: '#3f3f46', roughness: 0.85 });
+    return {
+      skin,
+      hair,
+      headband,
+      eyeWhite,
+      eyePupil,
+      tee,
+      jacket,
+      accent,
+      glove,
+      belt,
+      cargo,
+      pad,
+      boot,
+      bootSole,
+    };
   }, []);
 
   useEffect(() => {
@@ -87,21 +104,20 @@ export function HumanCharacter({
     const breath = Math.sin(t * 2.0);
     const sway = Math.sin(t * 0.95);
 
-    // Target joint rotations [x, y, z]
-    let hipsY = 0.92;
+    let hipsY = 0.96;
     let hipsRx = 0, hipsRy = 0, hipsRz = 0;
     let torsoRx = 0, torsoRy = 0, torsoRz = 0;
     let headRx = 0, headRy = 0;
 
-    let lArmRx = 0, lArmRy = 0, lArmRz = 0.08;
-    let lForeRx = -0.14;
-    let rArmRx = 0, rArmRy = 0, rArmRz = -0.08;
-    let rForeRx = -0.14;
+    let lArmRx = 0, lArmRy = 0, lArmRz = 0.09;
+    let lForeRx = -0.15;
+    let rArmRx = 0, rArmRy = 0, rArmRz = -0.09;
+    let rForeRx = -0.15;
 
-    let lLegRx = 0, lLegRz = 0.02;
+    let lLegRx = 0, lLegRz = 0.025;
     let lKneeRx = 0.03;
     let lFootRx = 0;
-    let rLegRx = 0, rLegRz = -0.02;
+    let rLegRx = 0, rLegRz = -0.025;
     let rKneeRx = 0.03;
     let rFootRx = 0;
 
@@ -110,26 +126,26 @@ export function HumanCharacter({
     switch (state) {
       case 'Idle':
       case 'StopMoving': {
-        hipsY = 0.92 + breath * 0.005;
+        hipsY = 0.96 + breath * 0.005;
         hipsRy = sway * 0.025;
         torsoRx = 0.02 + breath * 0.012;
         headRy = sway * 0.04;
         lArmRx = 0.03;
-        lArmRz = 0.09 + breath * 0.01;
+        lArmRz = 0.1 + breath * 0.01;
         lForeRx = -0.16;
         rArmRx = 0.03;
-        rArmRz = -0.09 - breath * 0.01;
+        rArmRz = -0.1 - breath * 0.01;
         rForeRx = -0.16;
         blend = 10;
         break;
       }
 
       case 'CombatIdle': {
-        hipsY = 0.87 + breath * 0.006;
+        hipsY = 0.9 + breath * 0.006;
         hipsRx = 0.06;
-        hipsRy = -0.22;
+        hipsRy = -0.24;
         torsoRx = 0.08;
-        torsoRy = 0.16;
+        torsoRy = 0.18;
         headRy = 0.06;
         lArmRx = -0.35;
         lArmRz = 0.25;
@@ -155,15 +171,15 @@ export function HumanCharacter({
       case 'WalkBackward': {
         const isSprint = state === 'Sprint';
         const isJog = state === 'Jog';
-        const legAmp = isSprint ? 0.82 : isJog ? 0.62 : 0.44;
-        const kneeAmp = isSprint ? 1.15 : isJog ? 0.85 : 0.55;
-        const armAmp = isSprint ? 0.85 : isJog ? 0.62 : 0.38;
-        const lean = isSprint ? 0.24 : isJog ? 0.12 : 0.04;
+        const legAmp = isSprint ? 0.84 : isJog ? 0.64 : 0.44;
+        const kneeAmp = isSprint ? 1.18 : isJog ? 0.86 : 0.55;
+        const armAmp = isSprint ? 0.88 : isJog ? 0.64 : 0.38;
+        const lean = isSprint ? 0.26 : isJog ? 0.13 : 0.04;
 
         const s = Math.sin(phase);
         const c = Math.cos(phase);
 
-        hipsY = 0.92 - Math.abs(c) * (isSprint ? 0.05 : 0.025);
+        hipsY = 0.96 - Math.abs(c) * (isSprint ? 0.055 : 0.025);
         hipsRy = s * 0.08;
         torsoRx = lean;
         torsoRy = -s * 0.12;
@@ -178,13 +194,13 @@ export function HumanCharacter({
         rFootRx = -s * 0.2;
 
         lArmRx = s * armAmp;
-        lForeRx = -0.28 - Math.max(0, -s) * 0.45;
+        lForeRx = -0.32 - Math.max(0, -s) * 0.48;
         if (hasWeapon) {
           rArmRx = -0.45 - s * 0.22;
           rForeRx = -0.58;
         } else {
           rArmRx = -s * armAmp;
-          rForeRx = -0.28 - Math.max(0, s) * 0.45;
+          rForeRx = -0.32 - Math.max(0, s) * 0.48;
         }
         blend = 16;
         break;
@@ -194,7 +210,7 @@ export function HumanCharacter({
       case 'StrafeRight': {
         const dir = state === 'StrafeLeft' ? 1 : -1;
         const s = Math.sin(phase);
-        hipsY = 0.9 - Math.abs(Math.cos(phase)) * 0.025;
+        hipsY = 0.94 - Math.abs(Math.cos(phase)) * 0.025;
         hipsRz = dir * 0.05;
         torsoRz = -dir * 0.04;
         lLegRx = -0.12;
@@ -217,7 +233,7 @@ export function HumanCharacter({
       case 'JumpLoop':
       case 'Fall': {
         const rising = state === 'JumpStart' || state === 'JumpLoop';
-        hipsY = 0.92;
+        hipsY = 0.96;
         torsoRx = rising ? 0.12 : 0.05;
         lLegRx = rising ? -0.55 : -0.3;
         lKneeRx = rising ? 0.85 : 0.52;
@@ -235,7 +251,7 @@ export function HumanCharacter({
 
       case 'Land':
       case 'FlightLand': {
-        hipsY = 0.8;
+        hipsY = 0.84;
         torsoRx = 0.2;
         lLegRx = -0.45;
         lKneeRx = 0.78;
@@ -257,7 +273,7 @@ export function HumanCharacter({
       case 'FlightAscend':
       case 'FlightDescend': {
         const isFwd = state === 'FlightForward' || state === 'FlightAscend';
-        hipsY = 0.92 + Math.sin(t * 2.6) * 0.025;
+        hipsY = 0.96 + Math.sin(t * 2.6) * 0.025;
         torsoRx = isFwd ? -0.1 : 0.04;
         headRx = isFwd ? -0.26 : 0;
         lLegRx = isFwd ? 0.16 : -0.18;
@@ -277,7 +293,7 @@ export function HumanCharacter({
       case 'Attack': {
         const p = step.attackProgress;
         const swing = p < 0.24 ? -p / 0.24 : -1 + ((p - 0.24) / 0.76) * 2.3;
-        hipsY = 0.86;
+        hipsY = 0.9;
         hipsRy = -0.2 + swing * 0.25;
         torsoRx = 0.14;
         torsoRy = swing * 0.42;
@@ -297,7 +313,7 @@ export function HumanCharacter({
       }
 
       case 'Block': {
-        hipsY = 0.85;
+        hipsY = 0.89;
         hipsRy = -0.18;
         torsoRx = 0.1;
         torsoRy = 0.15;
@@ -317,7 +333,7 @@ export function HumanCharacter({
       }
 
       case 'Dodge': {
-        hipsY = 0.78;
+        hipsY = 0.82;
         hipsRx = 0.26;
         torsoRx = 0.34;
         lLegRx = -0.55;
@@ -334,7 +350,7 @@ export function HumanCharacter({
 
       case 'HitReaction': {
         const hw = Math.sin(step.hitReactionProgress * Math.PI);
-        hipsY = 0.92 - 0.04 * hw;
+        hipsY = 0.96 - 0.04 * hw;
         torsoRx = -0.32 * hw;
         headRx = -0.35 * hw;
         lArmRx = -0.25 * hw;
@@ -397,109 +413,146 @@ export function HumanCharacter({
 
   return (
     <group ref={rootRef}>
-      <group ref={hipsRef} position={[0, 0.92, 0]}>
-        {/* Pelvis / Shorts base */}
-        <mesh castShadow receiveShadow material={materials.pants}>
-          <capsuleGeometry args={[0.135, 0.08, 6, 14]} />
+      <group ref={hipsRef} position={[0, 0.96, 0]}>
+        {/* Pelvis / Cargo Waist */}
+        <mesh castShadow receiveShadow material={materials.cargo}>
+          <capsuleGeometry args={[0.13, 0.08, 6, 14]} />
         </mesh>
 
         {/* Torso & Upper Body */}
         <group ref={torsoRef} position={[0, 0.04, 0]}>
-          {/* Tunic / Jacket */}
-          <mesh castShadow receiveShadow position={[0, 0.24, 0]} material={materials.tunic}>
-            <cylinderGeometry args={[0.19, 0.155, 0.46, 16]} />
+          {/* Fitted White Tee Core */}
+          <mesh castShadow receiveShadow position={[0, 0.24, 0.01]} material={materials.tee}>
+            <cylinderGeometry args={[0.175, 0.145, 0.45, 16]} />
           </mesh>
-          {/* Chest fullness */}
-          <mesh castShadow receiveShadow position={[0, 0.34, 0.02]} material={materials.tunic}>
-            <sphereGeometry args={[0.195, 16, 12]} />
+          {/* Open Sleeveless Tactical Jacket / Vest */}
+          <mesh castShadow receiveShadow position={[0, 0.25, -0.025]} material={materials.jacket}>
+            <cylinderGeometry args={[0.195, 0.16, 0.44, 16, 1, false, Math.PI * 0.22, Math.PI * 1.56]} />
           </mesh>
-          {/* Cream Undershirt Collar */}
-          <mesh castShadow position={[0, 0.47, 0.02]} material={materials.shirt}>
-            <cylinderGeometry args={[0.1, 0.125, 0.07, 14]} />
+          {/* Jacket Collar & Amber Shoulder Accents */}
+          <mesh castShadow position={[0, 0.47, -0.01]} material={materials.jacket}>
+            <cylinderGeometry args={[0.11, 0.13, 0.075, 14, 1, false, Math.PI * 0.25, Math.PI * 1.5]} />
           </mesh>
-          {/* Leather Belt & Gold Buckle */}
+          <mesh position={[0.14, 0.45, 0.02]} material={materials.accent}>
+            <boxGeometry args={[0.09, 0.025, 0.16]} />
+          </mesh>
+          <mesh position={[-0.14, 0.45, 0.02]} material={materials.accent}>
+            <boxGeometry args={[0.09, 0.025, 0.16]} />
+          </mesh>
+          {/* Tactical Utility Belt + Gold Buckle + Side Pouch */}
           <mesh castShadow position={[0, 0.04, 0]} material={materials.belt}>
-            <cylinderGeometry args={[0.162, 0.162, 0.06, 16]} />
+            <cylinderGeometry args={[0.158, 0.158, 0.06, 16]} />
           </mesh>
-          <mesh position={[0, 0.04, 0.162]} material={materials.buckle}>
-            <boxGeometry args={[0.07, 0.065, 0.02]} />
+          <mesh position={[0, 0.04, 0.158]} material={materials.accent}>
+            <boxGeometry args={[0.065, 0.055, 0.022]} />
+          </mesh>
+          <mesh castShadow position={[0.165, 0.03, 0]} material={materials.belt}>
+            <boxGeometry args={[0.05, 0.09, 0.085]} />
           </mesh>
 
           {/* Neck & Head */}
           <group ref={headRef} position={[0, 0.52, 0]}>
             <mesh castShadow position={[0, 0.04, 0]} material={materials.skin}>
-              <cylinderGeometry args={[0.055, 0.065, 0.1, 12]} />
+              <cylinderGeometry args={[0.052, 0.062, 0.1, 12]} />
             </mesh>
             {/* Head */}
-            <mesh castShadow receiveShadow position={[0, 0.21, 0.01]} material={materials.skin}>
-              <sphereGeometry args={[0.145, 20, 16]} />
+            <mesh castShadow receiveShadow position={[0, 0.2, 0.01]} material={materials.skin}>
+              <sphereGeometry args={[0.135, 20, 16]} />
+            </mesh>
+            {/* Subtle Jawline */}
+            <mesh castShadow position={[0, 0.13, 0.03]} material={materials.skin}>
+              <boxGeometry args={[0.13, 0.07, 0.12]} />
             </mesh>
             {/* Ears */}
-            <mesh position={[0.14, 0.2, 0]} material={materials.skin}>
-              <sphereGeometry args={[0.028, 8, 8]} />
+            <mesh position={[0.132, 0.19, 0]} material={materials.skin}>
+              <sphereGeometry args={[0.025, 8, 8]} />
             </mesh>
-            <mesh position={[-0.14, 0.2, 0]} material={materials.skin}>
-              <sphereGeometry args={[0.028, 8, 8]} />
+            <mesh position={[-0.132, 0.19, 0]} material={materials.skin}>
+              <sphereGeometry args={[0.025, 8, 8]} />
             </mesh>
-            {/* Eyes */}
-            <mesh position={[0.05, 0.22, 0.135]} material={materials.eyeWhite}>
-              <sphereGeometry args={[0.022, 10, 10]} />
+            {/* Sharp Eyes & Eyebrows */}
+            <mesh position={[0.048, 0.21, 0.125]} material={materials.eyeWhite}>
+              <boxGeometry args={[0.036, 0.018, 0.015]} />
             </mesh>
-            <mesh position={[-0.05, 0.22, 0.135]} material={materials.eyeWhite}>
-              <sphereGeometry args={[0.022, 10, 10]} />
+            <mesh position={[-0.048, 0.21, 0.125]} material={materials.eyeWhite}>
+              <boxGeometry args={[0.036, 0.018, 0.015]} />
             </mesh>
-            <mesh position={[0.05, 0.22, 0.149]} material={materials.eyePupil}>
-              <sphereGeometry args={[0.013, 10, 10]} />
+            <mesh position={[0.048, 0.21, 0.133]} material={materials.eyePupil}>
+              <sphereGeometry args={[0.011, 8, 8]} />
             </mesh>
-            <mesh position={[-0.05, 0.22, 0.149]} material={materials.eyePupil}>
-              <sphereGeometry args={[0.013, 10, 10]} />
+            <mesh position={[-0.048, 0.21, 0.133]} material={materials.eyePupil}>
+              <sphereGeometry args={[0.011, 8, 8]} />
+            </mesh>
+            <mesh position={[0.048, 0.232, 0.128]} rotation={[0, 0, -0.12]} material={materials.hair}>
+              <boxGeometry args={[0.044, 0.01, 0.015]} />
+            </mesh>
+            <mesh position={[-0.048, 0.232, 0.128]} rotation={[0, 0, 0.12]} material={materials.hair}>
+              <boxGeometry args={[0.044, 0.01, 0.015]} />
             </mesh>
             {/* Nose */}
-            <mesh position={[0, 0.19, 0.152]} material={materials.skin}>
-              <sphereGeometry args={[0.016, 8, 8]} />
+            <mesh position={[0, 0.18, 0.14]} material={materials.skin}>
+              <boxGeometry args={[0.02, 0.03, 0.02]} />
             </mesh>
-            {/* Stylized Hair Cap & Bangs */}
-            <mesh castShadow position={[0, 0.25, -0.015]} material={materials.hair}>
-              <sphereGeometry args={[0.154, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.62]} />
+            {/* Crimson Survivor Headband + Trailing Ties */}
+            <mesh castShadow position={[0, 0.255, 0.008]} material={materials.headband}>
+              <cylinderGeometry args={[0.138, 0.141, 0.042, 18]} />
             </mesh>
-            <mesh castShadow position={[0, 0.22, -0.06]} material={materials.hair}>
-              <sphereGeometry args={[0.145, 14, 12]} />
+            <mesh position={[0.03, 0.235, -0.145]} rotation={[0.45, 0.2, 0.15]} material={materials.headband}>
+              <boxGeometry args={[0.03, 0.13, 0.012]} />
             </mesh>
-            <mesh castShadow position={[0.05, 0.31, 0.095]} rotation={[0.45, 0.2, -0.25]} material={materials.hair}>
-              <coneGeometry args={[0.055, 0.12, 6]} />
+            <mesh position={[-0.02, 0.225, -0.145]} rotation={[0.55, -0.18, -0.1]} material={materials.headband}>
+              <boxGeometry args={[0.028, 0.15, 0.012]} />
             </mesh>
-            <mesh castShadow position={[-0.05, 0.31, 0.095]} rotation={[0.45, -0.2, 0.25]} material={materials.hair}>
-              <coneGeometry args={[0.055, 0.12, 6]} />
+            {/* Spiky Styled Hair */}
+            <mesh castShadow position={[0, 0.265, -0.01]} material={materials.hair}>
+              <sphereGeometry args={[0.144, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.56]} />
+            </mesh>
+            <mesh castShadow position={[0, 0.34, 0.04]} rotation={[0.35, 0, 0]} material={materials.hair}>
+              <coneGeometry args={[0.065, 0.14, 6]} />
+            </mesh>
+            <mesh castShadow position={[0.065, 0.32, 0.06]} rotation={[0.45, 0.2, -0.3]} material={materials.hair}>
+              <coneGeometry args={[0.05, 0.12, 6]} />
+            </mesh>
+            <mesh castShadow position={[-0.065, 0.32, 0.06]} rotation={[0.45, -0.2, 0.3]} material={materials.hair}>
+              <coneGeometry args={[0.05, 0.12, 6]} />
             </mesh>
           </group>
 
           {/* Left Arm */}
-          <group ref={leftArmRef} position={[0.23, 0.44, 0]}>
-            <mesh castShadow position={[0.01, -0.12, 0]} material={materials.tunic}>
-              <capsuleGeometry args={[0.058, 0.18, 6, 12]} />
+          <group ref={leftArmRef} position={[0.22, 0.44, 0]}>
+            <mesh castShadow position={[0.01, -0.12, 0]} material={materials.skin}>
+              <capsuleGeometry args={[0.052, 0.19, 6, 12]} />
             </mesh>
+            {/* Tactical Wristband */}
             <group ref={leftForeArmRef} position={[0.01, -0.26, 0]}>
               <mesh castShadow position={[0, -0.11, 0]} material={materials.skin}>
-                <capsuleGeometry args={[0.046, 0.18, 6, 12]} />
+                <capsuleGeometry args={[0.044, 0.18, 6, 12]} />
               </mesh>
-              <mesh castShadow position={[0, -0.23, 0]} material={materials.skin}>
-                <sphereGeometry args={[0.048, 10, 10]} />
+              <mesh position={[0, -0.18, 0]} material={materials.headband}>
+                <cylinderGeometry args={[0.048, 0.048, 0.055, 12]} />
+              </mesh>
+              {/* Fingerless Tactical Glove */}
+              <mesh castShadow position={[0, -0.23, 0]} material={materials.glove}>
+                <boxGeometry args={[0.072, 0.075, 0.08]} />
               </mesh>
             </group>
           </group>
 
           {/* Right Arm + Summoned Weapon Socket */}
-          <group ref={rightArmRef} position={[-0.23, 0.44, 0]}>
-            <mesh castShadow position={[-0.01, -0.12, 0]} material={materials.tunic}>
-              <capsuleGeometry args={[0.058, 0.18, 6, 12]} />
+          <group ref={rightArmRef} position={[-0.22, 0.44, 0]}>
+            <mesh castShadow position={[-0.01, -0.12, 0]} material={materials.skin}>
+              <capsuleGeometry args={[0.052, 0.19, 6, 12]} />
             </mesh>
             <group ref={rightForeArmRef} position={[-0.01, -0.26, 0]}>
               <mesh castShadow position={[0, -0.11, 0]} material={materials.skin}>
-                <capsuleGeometry args={[0.046, 0.18, 6, 12]} />
+                <capsuleGeometry args={[0.044, 0.18, 6, 12]} />
+              </mesh>
+              <mesh position={[0, -0.18, 0]} material={materials.headband}>
+                <cylinderGeometry args={[0.048, 0.048, 0.055, 12]} />
               </mesh>
               <group position={[0, -0.23, 0]}>
-                <mesh castShadow material={materials.skin}>
-                  <sphereGeometry args={[0.048, 10, 10]} />
+                <mesh castShadow material={materials.glove}>
+                  <boxGeometry args={[0.072, 0.075, 0.08]} />
                 </mesh>
                 {hasWeapon && weaponElement}
               </group>
@@ -509,16 +562,27 @@ export function HumanCharacter({
 
         {/* Left Leg */}
         <group ref={leftLegRef} position={[0.105, -0.02, 0]}>
-          <mesh castShadow receiveShadow position={[0, -0.2, 0]} material={materials.pants}>
-            <capsuleGeometry args={[0.072, 0.3, 6, 12]} />
+          <mesh castShadow receiveShadow position={[0, -0.21, 0]} material={materials.cargo}>
+            <capsuleGeometry args={[0.07, 0.32, 6, 12]} />
           </mesh>
-          <group ref={leftKneeRef} position={[0, -0.42, 0]}>
-            <mesh castShadow receiveShadow position={[0, -0.18, 0]} material={materials.pants}>
-              <capsuleGeometry args={[0.058, 0.28, 6, 12]} />
+          {/* Cargo Pocket */}
+          <mesh castShadow position={[0.068, -0.22, 0.01]} material={materials.cargo}>
+            <boxGeometry args={[0.035, 0.12, 0.095]} />
+          </mesh>
+          <group ref={leftKneeRef} position={[0, -0.44, 0]}>
+            {/* Tactical Knee Pad */}
+            <mesh castShadow position={[0, 0.01, 0.06]} material={materials.pad}>
+              <boxGeometry args={[0.095, 0.1, 0.045]} />
             </mesh>
-            <group ref={leftFootRef} position={[0, -0.38, 0]}>
-              <mesh castShadow receiveShadow position={[0, -0.045, 0.035]} material={materials.boots}>
-                <boxGeometry args={[0.11, 0.11, 0.22]} />
+            <mesh castShadow receiveShadow position={[0, -0.19, 0]} material={materials.cargo}>
+              <capsuleGeometry args={[0.056, 0.3, 6, 12]} />
+            </mesh>
+            <group ref={leftFootRef} position={[0, -0.4, 0]}>
+              <mesh castShadow receiveShadow position={[0, -0.04, 0.035]} material={materials.boot}>
+                <boxGeometry args={[0.105, 0.09, 0.23]} />
+              </mesh>
+              <mesh castShadow receiveShadow position={[0, -0.09, 0.035]} material={materials.bootSole}>
+                <boxGeometry args={[0.11, 0.02, 0.24]} />
               </mesh>
             </group>
           </group>
@@ -526,16 +590,30 @@ export function HumanCharacter({
 
         {/* Right Leg */}
         <group ref={rightLegRef} position={[-0.105, -0.02, 0]}>
-          <mesh castShadow receiveShadow position={[0, -0.2, 0]} material={materials.pants}>
-            <capsuleGeometry args={[0.072, 0.3, 6, 12]} />
+          <mesh castShadow receiveShadow position={[0, -0.21, 0]} material={materials.cargo}>
+            <capsuleGeometry args={[0.07, 0.32, 6, 12]} />
           </mesh>
-          <group ref={rightKneeRef} position={[0, -0.42, 0]}>
-            <mesh castShadow receiveShadow position={[0, -0.18, 0]} material={materials.pants}>
-              <capsuleGeometry args={[0.058, 0.28, 6, 12]} />
+          {/* Thigh Strap & Cargo Pocket */}
+          <mesh position={[0, -0.18, 0]} material={materials.belt}>
+            <cylinderGeometry args={[0.074, 0.074, 0.04, 12]} />
+          </mesh>
+          <mesh castShadow position={[-0.068, -0.22, 0.01]} material={materials.cargo}>
+            <boxGeometry args={[0.035, 0.12, 0.095]} />
+          </mesh>
+          <group ref={rightKneeRef} position={[0, -0.44, 0]}>
+            {/* Tactical Knee Pad */}
+            <mesh castShadow position={[0, 0.01, 0.06]} material={materials.pad}>
+              <boxGeometry args={[0.095, 0.1, 0.045]} />
             </mesh>
-            <group ref={rightFootRef} position={[0, -0.38, 0]}>
-              <mesh castShadow receiveShadow position={[0, -0.045, 0.035]} material={materials.boots}>
-                <boxGeometry args={[0.11, 0.11, 0.22]} />
+            <mesh castShadow receiveShadow position={[0, -0.19, 0]} material={materials.cargo}>
+              <capsuleGeometry args={[0.056, 0.3, 6, 12]} />
+            </mesh>
+            <group ref={rightFootRef} position={[0, -0.4, 0]}>
+              <mesh castShadow receiveShadow position={[0, -0.04, 0.035]} material={materials.boot}>
+                <boxGeometry args={[0.105, 0.09, 0.23]} />
+              </mesh>
+              <mesh castShadow receiveShadow position={[0, -0.09, 0.035]} material={materials.bootSole}>
+                <boxGeometry args={[0.11, 0.02, 0.24]} />
               </mesh>
             </group>
           </group>
