@@ -1,78 +1,15 @@
 import * as THREE from 'three';
-import { retargetClip } from 'three/examples/jsm/utils/SkeletonUtils.js';
-
-const RETARGET_CLIPS = ['idle', 'walk', 'run', 'sneak_pose', 'sad_pose'] as const;
-
-const CLIP_NAME_MAP: Record<string, string> = {
-  idle: 'Idle',
-  walk: 'Walk',
-  run: 'Run',
-  sneak_pose: 'CombatIdle',
-  sad_pose: 'HitReaction',
-};
 
 interface BoneBindInfo {
-  name: string;
+  bone: THREE.Bone;
   bindLocalQuat: THREE.Quaternion;
   worldBindQuat: THREE.Quaternion;
   worldBindQuatInv: THREE.Quaternion;
-  hipsRestY: number;
+  hipsRestPos: THREE.Vector3;
+  hipsUnitScale: number;
 }
 
-function findFirstSkinnedMesh(root: THREE.Object3D): THREE.SkinnedMesh | null {
-  let found: THREE.SkinnedMesh | null = null;
-  root.traverse((obj) => {
-    if (!found && (obj as THREE.SkinnedMesh).isSkinnedMesh) {
-      found = obj as THREE.SkinnedMesh;
-    }
-  });
-  return found;
-}
-
-function extractBoneBindMap(skeleton: THREE.Skeleton): Map<string, BoneBindInfo> {
-  const map = new Map<string, BoneBindInfo>();
-  const worldBindMap = new Map<THREE.Object3D, THREE.Matrix4>();
-
-  for (let i = 0; i < skeleton.bones.length; i++) {
-    worldBindMap.set(skeleton.bones[i], new THREE.Matrix4().copy(skeleton.boneInverses[i]).invert());
-  }
-
-  const parentInv = new THREE.Matrix4();
-  const localM = new THREE.Matrix4();
-  const pos = new THREE.Vector3();
-  const quat = new THREE.Quaternion();
-  const scl = new THREE.Vector3();
-  const wPos = new THREE.Vector3();
-  const wQuat = new THREE.Quaternion();
-  const wScl = new THREE.Vector3();
-
-  for (let i = 0; i < skeleton.bones.length; i++) {
-    const bone = skeleton.bones[i];
-    const worldBind = worldBindMap.get(bone);
-    if (!worldBind) continue;
-
-    const parentWorldBind = bone.parent ? worldBindMap.get(bone.parent) : undefined;
-    if (parentWorldBind) {
-      parentInv.copy(parentWorldBind).invert();
-      localM.copy(parentInv).multiply(worldBind);
-    } else {
-      localM.copy(worldBind);
-    }
-
-    localM.decompose(pos, quat, scl);
-    worldBind.decompose(wPos, wQuat, wScl);
-
-    map.set(bone.name, {
-      name: bone.name,
-      bindLocalQuat: quat.clone().normalize(),
-      worldBindQuat: wQuat.clone().normalize(),
-      worldBindQuatInv: wQuat.clone().normalize().invert(),
-      hipsRestY: bone.position.y,
-    });
-  }
-
-  return map;
-}
+type PoseSpec = Record<string, [number, number, number]>;
 
 function charDeltaQuat(
   info: BoneBindInfo,
@@ -86,8 +23,6 @@ function charDeltaQuat(
   const target = info.bindLocalQuat.clone().multiply(deltaLocal).normalize();
   return [target.x, target.y, target.z, target.w];
 }
-
-type PoseSpec = Record<string, [number, number, number]>;
 
 function makePoseClip(
   name: string,
@@ -117,7 +52,11 @@ function makePoseClip(
   if (hipsInfo && keyframes.some((kf) => kf.hipsOffsetY !== undefined)) {
     const posValues: number[] = [];
     for (const kf of keyframes) {
-      posValues.push(0, hipsInfo.hipsRestY + (kf.hipsOffsetY ?? 0), 0);
+      posValues.push(
+        hipsInfo.hipsRestPos.x,
+        hipsInfo.hipsRestPos.y + (kf.hipsOffsetY ?? 0) * hipsInfo.hipsUnitScale,
+        hipsInfo.hipsRestPos.z
+      );
     }
     tracks.push(new THREE.VectorKeyframeTrack('Hips.position', times, posValues));
   }
@@ -126,136 +65,382 @@ function makePoseClip(
 }
 
 /**
- * Builds a complete set of real THREE.AnimationClips for `human.glb`:
- * - Retargets real Mixamo motion-capture clips (`idle`, `walk`, `run`) from `animations_mixamo.glb`
- * - Generates keyframed AnimationClips for combat, jump, flight, dodge, hit, and death states
- *   so `THREE.AnimationMixer` drives 100% of character locomotion & actions smoothly.
+ * Builds complete, keyframed THREE.AnimationClips directly bound to the
+ * `adventurer_human.glb` (Quaternius Modular Men Adventurer) skeleton.
+ * Driven 100% by THREE.AnimationMixer + CharacterAnimationController.
  */
-export function buildHumanAnimationClips(
-  targetScene: THREE.Object3D,
-  sourceScene: THREE.Object3D,
-  sourceAnimations: THREE.AnimationClip[]
-): THREE.AnimationClip[] {
-  const targetSkinned = findFirstSkinnedMesh(targetScene);
-  const sourceSkinned = findFirstSkinnedMesh(sourceScene);
-  if (!targetSkinned) return [];
+export function buildAdventurerAnimationClips(scene: THREE.Object3D): THREE.AnimationClip[] {
+  scene.updateMatrixWorld(true);
 
-  targetScene.updateMatrixWorld(true);
-  sourceScene.updateMatrixWorld(true);
-
-  const clips: THREE.AnimationClip[] = [];
-  const bindMap = extractBoneBindMap(targetSkinned.skeleton);
-
-  // 1. Retarget real Mixamo locomotion clips from Xbot (animations_mixamo.glb)
-  if (sourceSkinned && sourceAnimations.length > 0) {
-    const boneNames: Record<string, string> = {};
-    for (const bone of targetSkinned.skeleton.bones) {
-      boneNames[bone.name] = `mixamorig:${bone.name}`;
+  const bindMap = new Map<string, BoneBindInfo>();
+  scene.traverse((obj) => {
+    if ((obj as THREE.Bone).isBone) {
+      const bone = obj as THREE.Bone;
+      const worldQ = new THREE.Quaternion();
+      bone.getWorldQuaternion(worldQ).normalize();
+      const restPos = bone.position.clone();
+      bindMap.set(bone.name, {
+        bone,
+        bindLocalQuat: bone.quaternion.clone().normalize(),
+        worldBindQuat: worldQ,
+        worldBindQuatInv: worldQ.clone().invert(),
+        hipsRestPos: restPos,
+        hipsUnitScale: restPos.length() > 0.2 ? 1 : 0.01,
+      });
     }
+  });
 
-    for (const srcName of RETARGET_CLIPS) {
-      const srcClip = sourceAnimations.find((c) => c.name === srcName);
-      if (!srcClip) continue;
-      try {
-        const retargeted = retargetClip(targetSkinned, sourceSkinned, srcClip, {
-          names: boneNames,
-          hip: 'Hips',
-          preserveBoneMatrix: false,
-          preserveHipPosition: false,
-        });
-        retargeted.name = CLIP_NAME_MAP[srcName] ?? srcName;
+  if (bindMap.size === 0) return [];
 
-        // Keep Hips vertical motion while locking XZ so CharacterController owns ground translation
-        const hipsTrack = retargeted.tracks.find(
-          (t) => t.name === 'Hips.position'
-        ) as THREE.VectorKeyframeTrack | undefined;
-        if (hipsTrack) {
-          for (let i = 0; i < hipsTrack.values.length; i += 3) {
-            hipsTrack.values[i] = 0;
-            hipsTrack.values[i + 2] = 0;
-          }
-        }
-        clips.push(retargeted);
-      } catch (err) {
-        console.warn(`[Animation] Retarget failed for ${srcName}:`, err);
-      }
-    }
-  }
+  // Relaxed arm-down angle from horizontal T-pose (~70 degrees down)
+  const armDown = 1.22;
 
-  // Fallback Idle if retarget wasn't available
-  if (!clips.some((c) => c.name === 'Idle')) {
-    clips.push(
-      makePoseClip(
-        'Idle',
-        2.0,
-        [
-          {
-            time: 0,
-            hipsOffsetY: 0,
-            pose: {
-              LeftArm: [0.03, 0, -0.34],
-              RightArm: [0.03, 0, 0.34],
-              LeftForeArm: [-0.15, 0, -0.34],
-              RightForeArm: [-0.15, 0, 0.34],
-            },
+  const clips: THREE.AnimationClip[] = [
+    // 1. Relaxed Non-Combat Idle
+    makePoseClip(
+      'Idle',
+      2.4,
+      [
+        {
+          time: 0,
+          hipsOffsetY: 0,
+          pose: {
+            Torso: [0.02, 0, 0],
+            Chest: [-0.02, 0, 0],
+            'UpperArm.L': [0.04, 0, -armDown],
+            'LowerArm.L': [-0.18, 0, -armDown],
+            'UpperArm.R': [0.04, 0, armDown],
+            'LowerArm.R': [-0.18, 0, armDown],
+            'UpperLeg.L': [-0.02, 0, 0.03],
+            'LowerLeg.L': [0.04, 0, 0],
+            'UpperLeg.R': [0.02, 0, -0.03],
+            'LowerLeg.R': [0.04, 0, 0],
           },
-          {
-            time: 1.0,
-            hipsOffsetY: 0.008,
-            pose: {
-              Spine1: [0.02, 0, 0],
-              LeftArm: [0.05, 0, -0.32],
-              RightArm: [0.05, 0, 0.32],
-              LeftForeArm: [-0.18, 0, -0.32],
-              RightForeArm: [-0.18, 0, 0.32],
-            },
+        },
+        {
+          time: 1.2,
+          hipsOffsetY: 0.012,
+          pose: {
+            Torso: [0.04, 0.02, 0],
+            Chest: [0.01, 0, 0],
+            Head: [0, 0.03, 0],
+            'UpperArm.L': [0.06, 0, -(armDown - 0.03)],
+            'LowerArm.L': [-0.22, 0, -(armDown - 0.03)],
+            'UpperArm.R': [0.06, 0, armDown - 0.03],
+            'LowerArm.R': [-0.22, 0, armDown - 0.03],
+            'UpperLeg.L': [-0.02, 0, 0.03],
+            'LowerLeg.L': [0.04, 0, 0],
+            'UpperLeg.R': [0.02, 0, -0.03],
+            'LowerLeg.R': [0.04, 0, 0],
           },
-          {
-            time: 2.0,
-            hipsOffsetY: 0,
-            pose: {
-              LeftArm: [0.03, 0, -0.34],
-              RightArm: [0.03, 0, 0.34],
-              LeftForeArm: [-0.15, 0, -0.34],
-              RightForeArm: [-0.15, 0, 0.34],
-            },
+        },
+        {
+          time: 2.4,
+          hipsOffsetY: 0,
+          pose: {
+            Torso: [0.02, 0, 0],
+            Chest: [-0.02, 0, 0],
+            'UpperArm.L': [0.04, 0, -armDown],
+            'LowerArm.L': [-0.18, 0, -armDown],
+            'UpperArm.R': [0.04, 0, armDown],
+            'LowerArm.R': [-0.18, 0, armDown],
+            'UpperLeg.L': [-0.02, 0, 0.03],
+            'LowerLeg.L': [0.04, 0, 0],
+            'UpperLeg.R': [0.02, 0, -0.03],
+            'LowerLeg.R': [0.04, 0, 0],
           },
-        ],
-        bindMap
-      )
-    );
-  }
+        },
+      ],
+      bindMap
+    ),
 
-  // 2. Action & aerial AnimationClips played through AnimationMixer
-  clips.push(
+    // 2. Natural Bipedal Walk Cycle (0.8s loop)
+    makePoseClip(
+      'Walk',
+      0.8,
+      [
+        {
+          time: 0,
+          hipsOffsetY: -0.01,
+          pose: {
+            Hips: [0.04, 0.08, 0],
+            Torso: [0.05, -0.08, 0],
+            'UpperLeg.L': [-0.46, 0, 0.02],
+            'LowerLeg.L': [0.15, 0, 0],
+            'Foot.L': [-0.12, 0, 0],
+            'UpperLeg.R': [0.42, 0, -0.02],
+            'LowerLeg.R': [0.22, 0, 0],
+            'Foot.R': [0.2, 0, 0],
+            'UpperArm.L': [0.38, 0, -armDown],
+            'LowerArm.L': [-0.25, 0, -armDown],
+            'UpperArm.R': [-0.38, 0, armDown],
+            'LowerArm.R': [-0.45, 0, armDown],
+          },
+        },
+        {
+          time: 0.2,
+          hipsOffsetY: 0.025,
+          pose: {
+            Hips: [0.04, 0, 0.02],
+            Torso: [0.05, 0, 0],
+            'UpperLeg.L': [-0.05, 0, 0.02],
+            'LowerLeg.L': [0.08, 0, 0],
+            'Foot.L': [0, 0, 0],
+            'UpperLeg.R': [-0.18, 0, -0.02],
+            'LowerLeg.R': [0.68, 0, 0],
+            'Foot.R': [-0.15, 0, 0],
+            'UpperArm.L': [0, 0, -armDown],
+            'LowerArm.L': [-0.28, 0, -armDown],
+            'UpperArm.R': [0, 0, armDown],
+            'LowerArm.R': [-0.28, 0, armDown],
+          },
+        },
+        {
+          time: 0.4,
+          hipsOffsetY: -0.01,
+          pose: {
+            Hips: [0.04, -0.08, 0],
+            Torso: [0.05, 0.08, 0],
+            'UpperLeg.L': [0.42, 0, 0.02],
+            'LowerLeg.L': [0.22, 0, 0],
+            'Foot.L': [0.2, 0, 0],
+            'UpperLeg.R': [-0.46, 0, -0.02],
+            'LowerLeg.R': [0.15, 0, 0],
+            'Foot.R': [-0.12, 0, 0],
+            'UpperArm.L': [-0.38, 0, -armDown],
+            'LowerArm.L': [-0.45, 0, -armDown],
+            'UpperArm.R': [0.38, 0, armDown],
+            'LowerArm.R': [-0.25, 0, armDown],
+          },
+        },
+        {
+          time: 0.6,
+          hipsOffsetY: 0.025,
+          pose: {
+            Hips: [0.04, 0, -0.02],
+            Torso: [0.05, 0, 0],
+            'UpperLeg.L': [-0.18, 0, 0.02],
+            'LowerLeg.L': [0.68, 0, 0],
+            'Foot.L': [-0.15, 0, 0],
+            'UpperLeg.R': [-0.05, 0, -0.02],
+            'LowerLeg.R': [0.08, 0, 0],
+            'Foot.R': [0, 0, 0],
+            'UpperArm.L': [0, 0, -armDown],
+            'LowerArm.L': [-0.28, 0, -armDown],
+            'UpperArm.R': [0, 0, armDown],
+            'LowerArm.R': [-0.28, 0, armDown],
+          },
+        },
+        {
+          time: 0.8,
+          hipsOffsetY: -0.01,
+          pose: {
+            Hips: [0.04, 0.08, 0],
+            Torso: [0.05, -0.08, 0],
+            'UpperLeg.L': [-0.46, 0, 0.02],
+            'LowerLeg.L': [0.15, 0, 0],
+            'Foot.L': [-0.12, 0, 0],
+            'UpperLeg.R': [0.42, 0, -0.02],
+            'LowerLeg.R': [0.22, 0, 0],
+            'Foot.R': [0.2, 0, 0],
+            'UpperArm.L': [0.38, 0, -armDown],
+            'LowerArm.L': [-0.25, 0, -armDown],
+            'UpperArm.R': [-0.38, 0, armDown],
+            'LowerArm.R': [-0.45, 0, armDown],
+          },
+        },
+      ],
+      bindMap
+    ),
+
+    // 3. Athletic Run / Sprint Cycle (0.56s loop)
+    makePoseClip(
+      'Run',
+      0.56,
+      [
+        {
+          time: 0,
+          hipsOffsetY: -0.03,
+          pose: {
+            Hips: [0.12, 0.12, 0],
+            Torso: [0.18, -0.15, 0],
+            Head: [-0.14, 0, 0],
+            'UpperLeg.L': [-0.78, 0, 0.02],
+            'LowerLeg.L': [0.32, 0, 0],
+            'Foot.L': [-0.15, 0, 0],
+            'UpperLeg.R': [0.68, 0, -0.02],
+            'LowerLeg.R': [0.45, 0, 0],
+            'Foot.R': [0.3, 0, 0],
+            'UpperArm.L': [0.68, 0, -armDown],
+            'LowerArm.L': [-0.85, 0, -armDown],
+            'UpperArm.R': [-0.68, 0, armDown],
+            'LowerArm.R': [-1.05, 0, armDown],
+          },
+        },
+        {
+          time: 0.14,
+          hipsOffsetY: 0.04,
+          pose: {
+            Hips: [0.12, 0, 0],
+            Torso: [0.18, 0, 0],
+            Head: [-0.14, 0, 0],
+            'UpperLeg.L': [-0.1, 0, 0.02],
+            'LowerLeg.L': [0.18, 0, 0],
+            'UpperLeg.R': [-0.45, 0, -0.02],
+            'LowerLeg.R': [1.25, 0, 0],
+            'UpperArm.L': [0, 0, -armDown],
+            'LowerArm.L': [-0.85, 0, -armDown],
+            'UpperArm.R': [0, 0, armDown],
+            'LowerArm.R': [-0.85, 0, armDown],
+          },
+        },
+        {
+          time: 0.28,
+          hipsOffsetY: -0.03,
+          pose: {
+            Hips: [0.12, -0.12, 0],
+            Torso: [0.18, 0.15, 0],
+            Head: [-0.14, 0, 0],
+            'UpperLeg.L': [0.68, 0, 0.02],
+            'LowerLeg.L': [0.45, 0, 0],
+            'Foot.L': [0.3, 0, 0],
+            'UpperLeg.R': [-0.78, 0, -0.02],
+            'LowerLeg.R': [0.32, 0, 0],
+            'Foot.R': [-0.15, 0, 0],
+            'UpperArm.L': [-0.68, 0, -armDown],
+            'LowerArm.L': [-1.05, 0, -armDown],
+            'UpperArm.R': [0.68, 0, armDown],
+            'LowerArm.R': [-0.85, 0, armDown],
+          },
+        },
+        {
+          time: 0.42,
+          hipsOffsetY: 0.04,
+          pose: {
+            Hips: [0.12, 0, 0],
+            Torso: [0.18, 0, 0],
+            Head: [-0.14, 0, 0],
+            'UpperLeg.L': [-0.45, 0, 0.02],
+            'LowerLeg.L': [1.25, 0, 0],
+            'UpperLeg.R': [-0.1, 0, -0.02],
+            'LowerLeg.R': [0.18, 0, 0],
+            'UpperArm.L': [0, 0, -armDown],
+            'LowerArm.L': [-0.85, 0, -armDown],
+            'UpperArm.R': [0, 0, armDown],
+            'LowerArm.R': [-0.85, 0, armDown],
+          },
+        },
+        {
+          time: 0.56,
+          hipsOffsetY: -0.03,
+          pose: {
+            Hips: [0.12, 0.12, 0],
+            Torso: [0.18, -0.15, 0],
+            Head: [-0.14, 0, 0],
+            'UpperLeg.L': [-0.78, 0, 0.02],
+            'LowerLeg.L': [0.32, 0, 0],
+            'Foot.L': [-0.15, 0, 0],
+            'UpperLeg.R': [0.68, 0, -0.02],
+            'LowerLeg.R': [0.45, 0, 0],
+            'Foot.R': [0.3, 0, 0],
+            'UpperArm.L': [0.68, 0, -armDown],
+            'LowerArm.L': [-0.85, 0, -armDown],
+            'UpperArm.R': [-0.68, 0, armDown],
+            'LowerArm.R': [-1.05, 0, armDown],
+          },
+        },
+      ],
+      bindMap
+    ),
+
+    // 4. Weapon-gated CombatIdle
+    makePoseClip(
+      'CombatIdle',
+      1.6,
+      [
+        {
+          time: 0,
+          hipsOffsetY: -0.05,
+          pose: {
+            Hips: [0.06, -0.25, 0],
+            Torso: [0.08, 0.16, 0],
+            'UpperArm.L': [-0.25, 0.2, -0.95],
+            'LowerArm.L': [-0.65, 0, -0.95],
+            'UpperArm.R': [-0.55, -0.2, 0.95],
+            'LowerArm.R': [-0.75, 0.15, 0.95],
+            'UpperLeg.L': [-0.24, 0.1, 0.08],
+            'LowerLeg.L': [0.38, 0, 0],
+            'UpperLeg.R': [0.18, -0.1, -0.08],
+            'LowerLeg.R': [0.28, 0, 0],
+          },
+        },
+        {
+          time: 0.8,
+          hipsOffsetY: -0.035,
+          pose: {
+            Hips: [0.06, -0.25, 0],
+            Torso: [0.1, 0.18, 0],
+            'UpperArm.L': [-0.28, 0.2, -0.92],
+            'LowerArm.L': [-0.68, 0, -0.92],
+            'UpperArm.R': [-0.58, -0.2, 0.92],
+            'LowerArm.R': [-0.78, 0.15, 0.92],
+            'UpperLeg.L': [-0.24, 0.1, 0.08],
+            'LowerLeg.L': [0.38, 0, 0],
+            'UpperLeg.R': [0.18, -0.1, -0.08],
+            'LowerLeg.R': [0.28, 0, 0],
+          },
+        },
+        {
+          time: 1.6,
+          hipsOffsetY: -0.05,
+          pose: {
+            Hips: [0.06, -0.25, 0],
+            Torso: [0.08, 0.16, 0],
+            'UpperArm.L': [-0.25, 0.2, -0.95],
+            'LowerArm.L': [-0.65, 0, -0.95],
+            'UpperArm.R': [-0.55, -0.2, 0.95],
+            'LowerArm.R': [-0.75, 0.15, 0.95],
+            'UpperLeg.L': [-0.24, 0.1, 0.08],
+            'LowerLeg.L': [0.38, 0, 0],
+            'UpperLeg.R': [0.18, -0.1, -0.08],
+            'LowerLeg.R': [0.28, 0, 0],
+          },
+        },
+      ],
+      bindMap
+    ),
+
+    // 5. JumpStart / JumpLoop / Fall / Land
     makePoseClip(
       'JumpStart',
       0.22,
       [
         {
           time: 0,
-          hipsOffsetY: -0.06,
+          hipsOffsetY: -0.08,
           pose: {
-            Spine: [0.15, 0, 0],
-            LeftUpLeg: [-0.45, 0, 0],
-            LeftLeg: [0.75, 0, 0],
-            RightUpLeg: [-0.45, 0, 0],
-            RightLeg: [0.75, 0, 0],
-            LeftArm: [0.2, 0, -0.35],
-            RightArm: [0.2, 0, 0.35],
+            Torso: [0.16, 0, 0],
+            'UpperLeg.L': [-0.45, 0, 0.04],
+            'LowerLeg.L': [0.78, 0, 0],
+            'UpperLeg.R': [-0.45, 0, -0.04],
+            'LowerLeg.R': [0.78, 0, 0],
+            'UpperArm.L': [0.25, 0, -armDown],
+            'UpperArm.R': [0.25, 0, armDown],
           },
         },
         {
           time: 0.22,
           hipsOffsetY: 0.02,
           pose: {
-            Spine: [0.08, 0, 0],
-            LeftUpLeg: [-0.55, 0, 0.05],
-            LeftLeg: [0.85, 0, 0],
-            RightUpLeg: [-0.15, 0, -0.05],
-            RightLeg: [0.42, 0, 0],
-            LeftArm: [-0.6, 0, -0.35],
-            RightArm: [-0.6, 0, 0.35],
+            Torso: [0.08, 0, 0],
+            'UpperLeg.L': [-0.55, 0, 0.05],
+            'LowerLeg.L': [0.85, 0, 0],
+            'UpperLeg.R': [-0.15, 0, -0.05],
+            'LowerLeg.R': [0.42, 0, 0],
+            'UpperArm.L': [-0.65, 0, -0.8],
+            'LowerArm.L': [-0.45, 0, -0.8],
+            'UpperArm.R': [-0.65, 0, 0.8],
+            'LowerArm.R': [-0.45, 0, 0.8],
           },
         },
       ],
@@ -268,25 +453,29 @@ export function buildHumanAnimationClips(
         {
           time: 0,
           pose: {
-            Spine: [0.08, 0, 0],
-            LeftUpLeg: [-0.48, 0, 0.05],
-            LeftLeg: [0.78, 0, 0],
-            RightUpLeg: [-0.18, 0, -0.05],
-            RightLeg: [0.4, 0, 0],
-            LeftArm: [-0.48, 0, -0.35],
-            RightArm: [-0.48, 0, 0.35],
+            Torso: [0.08, 0, 0],
+            'UpperLeg.L': [-0.48, 0, 0.05],
+            'LowerLeg.L': [0.78, 0, 0],
+            'UpperLeg.R': [-0.18, 0, -0.05],
+            'LowerLeg.R': [0.4, 0, 0],
+            'UpperArm.L': [-0.48, 0, -0.85],
+            'LowerArm.L': [-0.45, 0, -0.85],
+            'UpperArm.R': [-0.48, 0, 0.85],
+            'LowerArm.R': [-0.45, 0, 0.85],
           },
         },
         {
           time: 0.8,
           pose: {
-            Spine: [0.08, 0, 0],
-            LeftUpLeg: [-0.48, 0, 0.05],
-            LeftLeg: [0.78, 0, 0],
-            RightUpLeg: [-0.18, 0, -0.05],
-            RightLeg: [0.4, 0, 0],
-            LeftArm: [-0.48, 0, -0.35],
-            RightArm: [-0.48, 0, 0.35],
+            Torso: [0.08, 0, 0],
+            'UpperLeg.L': [-0.48, 0, 0.05],
+            'LowerLeg.L': [0.78, 0, 0],
+            'UpperLeg.R': [-0.18, 0, -0.05],
+            'LowerLeg.R': [0.4, 0, 0],
+            'UpperArm.L': [-0.48, 0, -0.85],
+            'LowerArm.L': [-0.45, 0, -0.85],
+            'UpperArm.R': [-0.48, 0, 0.85],
+            'LowerArm.R': [-0.45, 0, 0.85],
           },
         },
       ],
@@ -299,25 +488,29 @@ export function buildHumanAnimationClips(
         {
           time: 0,
           pose: {
-            Spine: [0.05, 0, 0],
-            LeftUpLeg: [-0.28, 0, 0.05],
-            LeftLeg: [0.48, 0, 0],
-            RightUpLeg: [-0.14, 0, -0.05],
-            RightLeg: [0.32, 0, 0],
-            LeftArm: [-0.25, 0, -0.2],
-            RightArm: [-0.25, 0, 0.2],
+            Torso: [0.05, 0, 0],
+            'UpperLeg.L': [-0.28, 0, 0.05],
+            'LowerLeg.L': [0.48, 0, 0],
+            'UpperLeg.R': [-0.14, 0, -0.05],
+            'LowerLeg.R': [0.32, 0, 0],
+            'UpperArm.L': [-0.25, 0, -0.65],
+            'LowerArm.L': [-0.4, 0, -0.65],
+            'UpperArm.R': [-0.25, 0, 0.65],
+            'LowerArm.R': [-0.4, 0, 0.65],
           },
         },
         {
           time: 0.8,
           pose: {
-            Spine: [0.05, 0, 0],
-            LeftUpLeg: [-0.28, 0, 0.05],
-            LeftLeg: [0.48, 0, 0],
-            RightUpLeg: [-0.14, 0, -0.05],
-            RightLeg: [0.32, 0, 0],
-            LeftArm: [-0.25, 0, -0.2],
-            RightArm: [-0.25, 0, 0.2],
+            Torso: [0.05, 0, 0],
+            'UpperLeg.L': [-0.28, 0, 0.05],
+            'LowerLeg.L': [0.48, 0, 0],
+            'UpperLeg.R': [-0.14, 0, -0.05],
+            'LowerLeg.R': [0.32, 0, 0],
+            'UpperArm.L': [-0.25, 0, -0.65],
+            'LowerArm.L': [-0.4, 0, -0.65],
+            'UpperArm.R': [-0.25, 0, 0.65],
+            'LowerArm.R': [-0.4, 0, 0.65],
           },
         },
       ],
@@ -331,26 +524,28 @@ export function buildHumanAnimationClips(
           time: 0,
           hipsOffsetY: -0.14,
           pose: {
-            Spine: [0.18, 0, 0],
-            LeftUpLeg: [-0.45, 0, 0.05],
-            LeftLeg: [0.78, 0, 0],
-            RightUpLeg: [-0.45, 0, -0.05],
-            RightLeg: [0.78, 0, 0],
-            LeftArm: [0.12, 0, -0.32],
-            RightArm: [0.12, 0, 0.32],
+            Torso: [0.18, 0, 0],
+            'UpperLeg.L': [-0.45, 0, 0.05],
+            'LowerLeg.L': [0.78, 0, 0],
+            'UpperLeg.R': [-0.45, 0, -0.05],
+            'LowerLeg.R': [0.78, 0, 0],
+            'UpperArm.L': [0.15, 0, -armDown],
+            'UpperArm.R': [0.15, 0, armDown],
           },
         },
         {
           time: 0.18,
           hipsOffsetY: 0,
           pose: {
-            LeftArm: [0.03, 0, -0.34],
-            RightArm: [0.03, 0, 0.34],
+            'UpperArm.L': [0.04, 0, -armDown],
+            'UpperArm.R': [0.04, 0, armDown],
           },
         },
       ],
       bindMap
     ),
+
+    // 6. Sword Attack, Block, Dodge, HitReaction, Death
     makePoseClip(
       'Attack',
       0.42,
@@ -360,14 +555,14 @@ export function buildHumanAnimationClips(
           hipsOffsetY: -0.04,
           pose: {
             Hips: [0.06, -0.2, 0],
-            Spine2: [0.08, -0.35, 0],
-            RightArm: [-0.9, -0.5, 0.25],
-            RightForeArm: [-0.55, 0, 0.25],
-            LeftArm: [-0.25, 0, -0.35],
-            LeftUpLeg: [-0.24, 0, 0.06],
-            LeftLeg: [0.38, 0, 0],
-            RightUpLeg: [0.2, 0, -0.06],
-            RightLeg: [0.26, 0, 0],
+            Chest: [0.08, -0.35, 0],
+            'UpperArm.R': [-0.9, -0.5, 0.8],
+            'LowerArm.R': [-0.55, 0, 0.8],
+            'UpperArm.L': [-0.25, 0, -armDown],
+            'UpperLeg.L': [-0.24, 0, 0.06],
+            'LowerLeg.L': [0.38, 0, 0],
+            'UpperLeg.R': [0.2, 0, -0.06],
+            'LowerLeg.R': [0.26, 0, 0],
           },
         },
         {
@@ -375,14 +570,10 @@ export function buildHumanAnimationClips(
           hipsOffsetY: -0.06,
           pose: {
             Hips: [0.08, -0.3, 0],
-            Spine2: [0.12, -0.45, 0],
-            RightArm: [-1.15, -0.65, 0.2],
-            RightForeArm: [-0.45, 0, 0.2],
-            LeftArm: [-0.2, 0, -0.35],
-            LeftUpLeg: [-0.28, 0, 0.06],
-            LeftLeg: [0.42, 0, 0],
-            RightUpLeg: [0.22, 0, -0.06],
-            RightLeg: [0.28, 0, 0],
+            Chest: [0.12, -0.45, 0],
+            'UpperArm.R': [-1.15, -0.65, 0.7],
+            'LowerArm.R': [-0.45, 0, 0.7],
+            'UpperArm.L': [-0.2, 0, -armDown],
           },
         },
         {
@@ -390,14 +581,10 @@ export function buildHumanAnimationClips(
           hipsOffsetY: -0.05,
           pose: {
             Hips: [0.08, 0.25, 0],
-            Spine2: [0.14, 0.45, 0],
-            RightArm: [-0.55, 0.75, 0.3],
-            RightForeArm: [-0.25, 0, 0.3],
-            LeftArm: [-0.15, 0, -0.38],
-            LeftUpLeg: [-0.24, 0, 0.06],
-            LeftLeg: [0.36, 0, 0],
-            RightUpLeg: [0.18, 0, -0.06],
-            RightLeg: [0.24, 0, 0],
+            Chest: [0.14, 0.45, 0],
+            'UpperArm.R': [-0.55, 0.75, 0.85],
+            'LowerArm.R': [-0.25, 0, 0.85],
+            'UpperArm.L': [-0.15, 0, -armDown],
           },
         },
         {
@@ -405,10 +592,10 @@ export function buildHumanAnimationClips(
           hipsOffsetY: -0.04,
           pose: {
             Hips: [0.06, 0.1, 0],
-            Spine2: [0.08, 0.18, 0],
-            RightArm: [-0.65, 0.2, 0.3],
-            RightForeArm: [-0.65, 0, 0.3],
-            LeftArm: [-0.25, 0, -0.35],
+            Chest: [0.08, 0.18, 0],
+            'UpperArm.R': [-0.65, 0.2, 0.9],
+            'LowerArm.R': [-0.65, 0, 0.9],
+            'UpperArm.L': [-0.25, 0, -armDown],
           },
         },
       ],
@@ -423,15 +610,15 @@ export function buildHumanAnimationClips(
           hipsOffsetY: -0.06,
           pose: {
             Hips: [0.08, -0.2, 0],
-            Spine2: [0.1, 0.15, 0],
-            RightArm: [-0.95, 0.45, 0.28],
-            RightForeArm: [-1.05, -0.35, 0.28],
-            LeftArm: [-0.55, -0.2, -0.32],
-            LeftForeArm: [-0.8, 0, -0.32],
-            LeftUpLeg: [-0.28, 0, 0.06],
-            LeftLeg: [0.44, 0, 0],
-            RightUpLeg: [0.22, 0, -0.06],
-            RightLeg: [0.3, 0, 0],
+            Chest: [0.1, 0.15, 0],
+            'UpperArm.R': [-0.95, 0.45, 0.85],
+            'LowerArm.R': [-1.05, -0.35, 0.85],
+            'UpperArm.L': [-0.55, -0.2, -0.9],
+            'LowerArm.L': [-0.8, 0, -0.9],
+            'UpperLeg.L': [-0.28, 0, 0.06],
+            'LowerLeg.L': [0.44, 0, 0],
+            'UpperLeg.R': [0.22, 0, -0.06],
+            'LowerLeg.R': [0.3, 0, 0],
           },
         },
         {
@@ -439,15 +626,15 @@ export function buildHumanAnimationClips(
           hipsOffsetY: -0.06,
           pose: {
             Hips: [0.08, -0.2, 0],
-            Spine2: [0.1, 0.15, 0],
-            RightArm: [-0.95, 0.45, 0.28],
-            RightForeArm: [-1.05, -0.35, 0.28],
-            LeftArm: [-0.55, -0.2, -0.32],
-            LeftForeArm: [-0.8, 0, -0.32],
-            LeftUpLeg: [-0.28, 0, 0.06],
-            LeftLeg: [0.44, 0, 0],
-            RightUpLeg: [0.22, 0, -0.06],
-            RightLeg: [0.3, 0, 0],
+            Chest: [0.1, 0.15, 0],
+            'UpperArm.R': [-0.95, 0.45, 0.85],
+            'LowerArm.R': [-1.05, -0.35, 0.85],
+            'UpperArm.L': [-0.55, -0.2, -0.9],
+            'LowerArm.L': [-0.8, 0, -0.9],
+            'UpperLeg.L': [-0.28, 0, 0.06],
+            'LowerLeg.L': [0.44, 0, 0],
+            'UpperLeg.R': [0.22, 0, -0.06],
+            'LowerLeg.R': [0.3, 0, 0],
           },
         },
       ],
@@ -462,13 +649,13 @@ export function buildHumanAnimationClips(
           hipsOffsetY: -0.14,
           pose: {
             Hips: [0.26, 0, 0],
-            Spine2: [0.32, 0, 0],
-            LeftUpLeg: [-0.55, 0, 0.05],
-            LeftLeg: [0.88, 0, 0],
-            RightUpLeg: [0.25, 0, -0.05],
-            RightLeg: [0.55, 0, 0],
-            LeftArm: [0.42, 0, -0.35],
-            RightArm: [0.42, 0, 0.35],
+            Chest: [0.32, 0, 0],
+            'UpperLeg.L': [-0.55, 0, 0.05],
+            'LowerLeg.L': [0.88, 0, 0],
+            'UpperLeg.R': [0.25, 0, -0.05],
+            'LowerLeg.R': [0.55, 0, 0],
+            'UpperArm.L': [0.42, 0, -armDown],
+            'UpperArm.R': [0.42, 0, armDown],
           },
         },
         {
@@ -476,9 +663,42 @@ export function buildHumanAnimationClips(
           hipsOffsetY: -0.04,
           pose: {
             Hips: [0.08, 0, 0],
-            Spine2: [0.1, 0, 0],
-            LeftArm: [0.1, 0, -0.34],
-            RightArm: [0.1, 0, 0.34],
+            Chest: [0.1, 0, 0],
+            'UpperArm.L': [0.1, 0, -armDown],
+            'UpperArm.R': [0.1, 0, armDown],
+          },
+        },
+      ],
+      bindMap
+    ),
+    makePoseClip(
+      'HitReaction',
+      0.35,
+      [
+        {
+          time: 0,
+          hipsOffsetY: 0,
+          pose: {
+            'UpperArm.L': [0.04, 0, -armDown],
+            'UpperArm.R': [0.04, 0, armDown],
+          },
+        },
+        {
+          time: 0.14,
+          hipsOffsetY: -0.04,
+          pose: {
+            Torso: [-0.28, 0, 0],
+            Head: [-0.32, 0, 0],
+            'UpperArm.L': [-0.25, 0, -0.9],
+            'UpperArm.R': [-0.25, 0, 0.9],
+          },
+        },
+        {
+          time: 0.35,
+          hipsOffsetY: 0,
+          pose: {
+            'UpperArm.L': [0.04, 0, -armDown],
+            'UpperArm.R': [0.04, 0, armDown],
           },
         },
       ],
@@ -492,39 +712,43 @@ export function buildHumanAnimationClips(
           time: 0,
           hipsOffsetY: 0,
           pose: {
-            Spine: [-0.15, 0, 0],
+            Torso: [-0.15, 0, 0],
+            'UpperArm.L': [0.04, 0, -armDown],
+            'UpperArm.R': [0.04, 0, armDown],
           },
         },
         {
           time: 0.45,
-          hipsOffsetY: -0.45,
+          hipsOffsetY: -0.42,
           pose: {
             Hips: [0.65, 0, 0],
-            LeftUpLeg: [-0.45, 0, 0.08],
-            LeftLeg: [0.85, 0, 0],
-            RightUpLeg: [-0.35, 0, -0.08],
-            RightLeg: [0.75, 0, 0],
-            LeftArm: [-0.4, 0, -0.25],
-            RightArm: [-0.4, 0, 0.25],
+            'UpperLeg.L': [-0.45, 0, 0.08],
+            'LowerLeg.L': [0.85, 0, 0],
+            'UpperLeg.R': [-0.35, 0, -0.08],
+            'LowerLeg.R': [0.75, 0, 0],
+            'UpperArm.L': [-0.4, 0, -0.8],
+            'UpperArm.R': [-0.4, 0, 0.8],
           },
         },
         {
           time: 0.85,
-          hipsOffsetY: -0.88,
+          hipsOffsetY: -0.82,
           pose: {
             Hips: [1.45, 0, 0],
-            Spine2: [0.2, 0, 0],
-            LeftUpLeg: [-0.2, 0, 0.1],
-            LeftLeg: [0.3, 0, 0],
-            RightUpLeg: [-0.15, 0, -0.1],
-            RightLeg: [0.25, 0, 0],
-            LeftArm: [-0.35, 0, -0.2],
-            RightArm: [-0.35, 0, 0.2],
+            Chest: [0.2, 0, 0],
+            'UpperLeg.L': [-0.2, 0, 0.1],
+            'LowerLeg.L': [0.3, 0, 0],
+            'UpperLeg.R': [-0.15, 0, -0.1],
+            'LowerLeg.R': [0.25, 0, 0],
+            'UpperArm.L': [-0.35, 0, -0.6],
+            'UpperArm.R': [-0.35, 0, 0.6],
           },
         },
       ],
       bindMap
     ),
+
+    // 7. Flight Hover & Forward Flight
     makePoseClip(
       'FlightHover',
       1.6,
@@ -533,39 +757,39 @@ export function buildHumanAnimationClips(
           time: 0,
           hipsOffsetY: 0,
           pose: {
-            Spine: [0.04, 0, 0],
-            LeftUpLeg: [-0.16, 0, 0.05],
-            LeftLeg: [0.38, 0, 0],
-            RightUpLeg: [-0.08, 0, -0.05],
-            RightLeg: [0.22, 0, 0],
-            LeftArm: [-0.1, 0, -0.25],
-            RightArm: [-0.1, 0, 0.25],
+            Torso: [0.04, 0, 0],
+            'UpperLeg.L': [-0.16, 0, 0.05],
+            'LowerLeg.L': [0.38, 0, 0],
+            'UpperLeg.R': [-0.08, 0, -0.05],
+            'LowerLeg.R': [0.22, 0, 0],
+            'UpperArm.L': [-0.1, 0, -0.95],
+            'UpperArm.R': [-0.1, 0, 0.95],
           },
         },
         {
           time: 0.8,
           hipsOffsetY: 0.04,
           pose: {
-            Spine: [0.06, 0, 0],
-            LeftUpLeg: [-0.2, 0, 0.05],
-            LeftLeg: [0.42, 0, 0],
-            RightUpLeg: [-0.1, 0, -0.05],
-            RightLeg: [0.25, 0, 0],
-            LeftArm: [-0.14, 0, -0.22],
-            RightArm: [-0.14, 0, 0.22],
+            Torso: [0.06, 0, 0],
+            'UpperLeg.L': [-0.2, 0, 0.05],
+            'LowerLeg.L': [0.42, 0, 0],
+            'UpperLeg.R': [-0.1, 0, -0.05],
+            'LowerLeg.R': [0.25, 0, 0],
+            'UpperArm.L': [-0.14, 0, -0.9],
+            'UpperArm.R': [-0.14, 0, 0.9],
           },
         },
         {
           time: 1.6,
           hipsOffsetY: 0,
           pose: {
-            Spine: [0.04, 0, 0],
-            LeftUpLeg: [-0.16, 0, 0.05],
-            LeftLeg: [0.38, 0, 0],
-            RightUpLeg: [-0.08, 0, -0.05],
-            RightLeg: [0.22, 0, 0],
-            LeftArm: [-0.1, 0, -0.25],
-            RightArm: [-0.1, 0, 0.25],
+            Torso: [0.04, 0, 0],
+            'UpperLeg.L': [-0.16, 0, 0.05],
+            'LowerLeg.L': [0.38, 0, 0],
+            'UpperLeg.R': [-0.08, 0, -0.05],
+            'LowerLeg.R': [0.22, 0, 0],
+            'UpperArm.L': [-0.1, 0, -0.95],
+            'UpperArm.R': [-0.1, 0, 0.95],
           },
         },
       ],
@@ -578,33 +802,33 @@ export function buildHumanAnimationClips(
         {
           time: 0,
           pose: {
-            Spine: [-0.1, 0, 0],
+            Torso: [-0.1, 0, 0],
             Head: [-0.25, 0, 0],
-            LeftUpLeg: [0.16, 0, 0.04],
-            LeftLeg: [0.22, 0, 0],
-            RightUpLeg: [0.1, 0, -0.04],
-            RightLeg: [0.16, 0, 0],
-            LeftArm: [0.55, 0, -0.3],
-            RightArm: [0.55, 0, 0.3],
+            'UpperLeg.L': [0.16, 0, 0.04],
+            'LowerLeg.L': [0.22, 0, 0],
+            'UpperLeg.R': [0.1, 0, -0.04],
+            'LowerLeg.R': [0.16, 0, 0],
+            'UpperArm.L': [0.55, 0, -1.0],
+            'UpperArm.R': [0.55, 0, 1.0],
           },
         },
         {
           time: 1.2,
           pose: {
-            Spine: [-0.1, 0, 0],
+            Torso: [-0.1, 0, 0],
             Head: [-0.25, 0, 0],
-            LeftUpLeg: [0.16, 0, 0.04],
-            LeftLeg: [0.22, 0, 0],
-            RightUpLeg: [0.1, 0, -0.04],
-            RightLeg: [0.16, 0, 0],
-            LeftArm: [0.55, 0, -0.3],
-            RightArm: [0.55, 0, 0.3],
+            'UpperLeg.L': [0.16, 0, 0.04],
+            'LowerLeg.L': [0.22, 0, 0],
+            'UpperLeg.R': [0.1, 0, -0.04],
+            'LowerLeg.R': [0.16, 0, 0],
+            'UpperArm.L': [0.55, 0, -1.0],
+            'UpperArm.R': [0.55, 0, 1.0],
           },
         },
       ],
       bindMap
-    )
-  );
+    ),
+  ];
 
   return clips;
 }

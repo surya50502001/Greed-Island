@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal, useFrame, useThree } from '@react-three/fiber';
-import { useAnimations, useGLTF } from '@react-three/drei';
+import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { getGroundHeight } from '../world/terrain';
 import { EnemyEntity } from './Enemies';
 import { CharacterController } from '../gameplay/character/CharacterController';
 import { CharacterAnimationController } from '../gameplay/character/CharacterAnimationController';
-import { buildHumanAnimationClips } from '../gameplay/character/HumanAnimationClips';
+import { buildAdventurerAnimationClips } from '../gameplay/character/HumanAnimationClips';
 import {
   DEFAULT_CHARACTER_MODEL_URL,
   getMissingStatesForClips,
@@ -56,7 +56,6 @@ export function Player({
 }: PlayerProps) {
   const { camera, gl } = useThree();
   const { scene, animations } = useGLTF(modelUrl);
-  const animSrc = useGLTF('/models/animations_mixamo.glb');
 
   const groupRef = useRef<THREE.Group>(null);
   const tiltGroupRef = useRef<THREE.Group>(null);
@@ -65,13 +64,16 @@ export function Player({
   const auraGroupRef = useRef<THREE.Group>(null);
   const weaponGroupRef = useRef<THREE.Group>(null);
 
-  const generatedClips = useMemo(() => {
+  const { generatedClips, mixer, actions } = useMemo(() => {
     const hasNativeLocomotion = animations.some((c) => c.name === 'Walk' || c.name === 'Run');
-    if (hasNativeLocomotion) return animations;
-    return buildHumanAnimationClips(scene, animSrc.scene, animSrc.animations);
-  }, [scene, animations, animSrc.scene, animSrc.animations]);
-
-  const { actions, mixer } = useAnimations(generatedClips, modelRef);
+    const clips = hasNativeLocomotion ? animations : buildAdventurerAnimationClips(scene);
+    const m = new THREE.AnimationMixer(scene);
+    const act: Record<string, THREE.AnimationAction | null> = {};
+    for (const clip of clips) {
+      act[clip.name] = m.clipAction(clip);
+    }
+    return { generatedClips: clips, mixer: m, actions: act };
+  }, [scene, animations]);
 
   const controllerRef = useRef<CharacterController>(new CharacterController(0, 0));
   const animControllerRef = useRef<CharacterAnimationController>(
@@ -79,6 +81,7 @@ export function Player({
   );
   const footBonesRef = useRef<THREE.Object3D[]>([]);
   const footPosRef = useRef(new THREE.Vector3());
+  const footClearanceRef = useRef<number>(0.06);
 
   const [rightHandBone, setRightHandBone] = useState<THREE.Object3D | null>(null);
   const [handInvScale, setHandInvScale] = useState<number>(1);
@@ -159,10 +162,10 @@ export function Player({
           }
         }
       }
-      if (!hand && /RightHand(_\d+)?$/i.test(obj.name)) {
+      if (!hand && /^(RightHand|Hand\.R)(_\d+)?$/i.test(obj.name)) {
         hand = obj;
       }
-      if (/^(Left|Right)(ToeBase|Foot)(_\d+)?$/i.test(obj.name)) {
+      if (/^((Left|Right)(ToeBase|Foot)|Foot\.(L|R))(_\d+)?$/i.test(obj.name)) {
         feet.push(obj);
       }
     });
@@ -175,6 +178,17 @@ export function Player({
     const normScale = size.y > 0.01 ? 1.85 / size.y : 1;
     setModelNormScale(normScale);
     setModelOffsetY(-box.min.y * normScale);
+
+    if (feet.length > 0) {
+      let minRestFootY = Infinity;
+      for (const f of feet) {
+        f.getWorldPosition(footPosRef.current);
+        if (footPosRef.current.y < minRestFootY) minRestFootY = footPosRef.current.y;
+      }
+      if (minRestFootY < Infinity) {
+        footClearanceRef.current = Math.max(0.03, (minRestFootY - box.min.y) * normScale);
+      }
+    }
 
     if (hand) {
       const worldScale = new THREE.Vector3();
@@ -409,6 +423,7 @@ export function Player({
 
     // Update animation state machine & speed-matched AnimationMixer blending
     animControllerRef.current.update(step.state, step.horizSpeed, actions);
+    mixer.update(dt);
 
     // Keep feet grounded on terrain/platforms during grounded animation states
     if (modelRef.current && groupRef.current && step.grounded && step.state !== 'Death') {
@@ -422,7 +437,7 @@ export function Player({
           if (footPosRef.current.y < minFootY) minFootY = footPosRef.current.y;
         }
         if (minFootY < Infinity) {
-          modelRef.current.position.y += 0.042 - minFootY;
+          modelRef.current.position.y += footClearanceRef.current - minFootY;
         }
       }
     } else if (modelRef.current && !step.grounded) {
@@ -601,4 +616,3 @@ export function Player({
 }
 
 useGLTF.preload(DEFAULT_CHARACTER_MODEL_URL);
-useGLTF.preload('/models/animations_mixamo.glb');
