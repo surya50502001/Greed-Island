@@ -3,6 +3,8 @@ export const DEFAULT_CHARACTER_MODEL_URL =
 
 export type CharacterLocomotionState =
   | 'Idle'
+  | 'StartMoving'
+  | 'StopMoving'
   | 'Walk'
   | 'Jog'
   | 'Sprint'
@@ -15,15 +17,19 @@ export type CharacterLocomotionState =
   | 'Land'
   | 'CombatIdle'
   | 'Attack'
+  | 'Block'
+  | 'Dodge'
   | 'HitReaction'
   | 'Death'
   | 'FlightTakeoff'
   | 'FlightHover'
   | 'FlightForward'
+  | 'FlightAscend'
+  | 'FlightDescend'
   | 'FlightLand';
 
 export interface ClipResolution {
-  clipName: string;
+  clipName: string | null;
   isNativeClip: boolean;
   reverse?: boolean;
   loopOnce?: boolean;
@@ -31,11 +37,13 @@ export interface ClipResolution {
 
 /**
  * Candidate clip names per state so a full-featured humanoid GLB
- * automatically uses native clips, while Soldier.glb (Idle, Walk, Run, TPose)
- * falls back honestly to its closest available clip.
+ * (e.g. Mixamo / Blender export at public/models/adventurer.glb)
+ * automatically binds native clips.
  */
-const STATE_CLIP_CANDIDATES: Record<CharacterLocomotionState, string[]> = {
+export const STATE_CLIP_CANDIDATES: Record<CharacterLocomotionState, string[]> = {
   Idle: ['Idle', 'idle'],
+  StartMoving: ['StartMoving', 'Start_Walk', 'WalkStart'],
+  StopMoving: ['StopMoving', 'Stop_Walk', 'WalkStop'],
   Walk: ['Walk', 'walk'],
   Jog: ['Jog', 'Run', 'run'],
   Sprint: ['Sprint', 'Run', 'run'],
@@ -46,20 +54,27 @@ const STATE_CLIP_CANDIDATES: Record<CharacterLocomotionState, string[]> = {
   JumpLoop: ['JumpLoop', 'Jump_Loop', 'Jump'],
   Fall: ['Fall', 'Falling', 'InAir'],
   Land: ['Land', 'Landing'],
-  CombatIdle: ['CombatIdle', 'SwordIdle', 'Idle'],
+  CombatIdle: ['CombatIdle', 'SwordIdle'],
   Attack: ['Attack', 'SwordSlash', 'Slash'],
+  Block: ['Block', 'SwordBlock', 'Guard'],
+  Dodge: ['Dodge', 'Roll', 'Evade'],
   HitReaction: ['HitReaction', 'Hit', 'Damage'],
   Death: ['Death', 'Die'],
   FlightTakeoff: ['FlightTakeoff', 'Takeoff'],
   FlightHover: ['FlightHover', 'Hover'],
   FlightForward: ['FlightForward', 'Fly'],
+  FlightAscend: ['FlightAscend', 'FlyUp'],
+  FlightDescend: ['FlightDescend', 'FlyDown'],
   FlightLand: ['FlightLand', 'Land'],
 };
 
 const ONE_SHOT_STATES = new Set<CharacterLocomotionState>([
+  'StartMoving',
+  'StopMoving',
   'JumpStart',
   'Land',
   'Attack',
+  'Dodge',
   'HitReaction',
   'Death',
   'FlightTakeoff',
@@ -72,52 +87,46 @@ export function resolveClipForState(
 ): ClipResolution {
   const candidates = STATE_CLIP_CANDIDATES[state];
   const loopOnce = ONE_SHOT_STATES.has(state);
+
   for (const candidate of candidates) {
     if (availableClips.includes(candidate)) {
       return { clipName: candidate, isNativeClip: true, loopOnce };
     }
   }
 
-  // Honest fallbacks for minimal GLBs such as Soldier.glb (Idle, Walk, Run, TPose)
+  // Minimal fallback for Soldier.glb (Idle, Walk, Run, TPose)
   switch (state) {
     case 'WalkBackward':
       if (availableClips.includes('Walk')) {
         return { clipName: 'Walk', isNativeClip: false, reverse: true };
       }
       break;
+    case 'StartMoving':
+    case 'StopMoving':
     case 'StrafeLeft':
     case 'StrafeRight':
       if (availableClips.includes('Walk')) {
         return { clipName: 'Walk', isNativeClip: false };
       }
       break;
-    case 'Sprint':
     case 'Jog':
+    case 'Sprint':
       if (availableClips.includes('Run')) {
         return { clipName: 'Run', isNativeClip: false };
       }
       break;
-    case 'FlightForward':
-      if (availableClips.includes('Idle')) {
-        return { clipName: 'Idle', isNativeClip: false };
-      }
-      break;
-    case 'JumpStart':
-    case 'JumpLoop':
-    case 'Fall':
-    case 'Land':
-    case 'CombatIdle':
-    case 'Attack':
-    case 'HitReaction':
-    case 'Death':
-    case 'FlightTakeoff':
-    case 'FlightHover':
-    case 'FlightLand':
+    default:
       if (availableClips.includes('Idle')) {
         return { clipName: 'Idle', isNativeClip: false };
       }
       break;
   }
 
-  return { clipName: availableClips[0] ?? 'Idle', isNativeClip: false };
+  return { clipName: availableClips[0] ?? null, isNativeClip: false };
+}
+
+export function getMissingStatesForClips(availableClips: string[]): CharacterLocomotionState[] {
+  return (Object.keys(STATE_CLIP_CANDIDATES) as CharacterLocomotionState[]).filter(
+    (state) => !resolveClipForState(state, availableClips).isNativeClip
+  );
 }

@@ -6,7 +6,10 @@ import { getTerrainHeight } from '../world/terrain';
 import { EnemyEntity } from './Enemies';
 import { CharacterController } from '../gameplay/character/CharacterController';
 import { CharacterAnimationController } from '../gameplay/character/CharacterAnimationController';
-import { DEFAULT_CHARACTER_MODEL_URL } from '../gameplay/character/CharacterStates';
+import {
+  DEFAULT_CHARACTER_MODEL_URL,
+  getMissingStatesForClips,
+} from '../gameplay/character/CharacterStates';
 
 interface PlayerProps {
   modelUrl?: string;
@@ -64,7 +67,7 @@ export function Player({
   useEffect(() => {
     if (hitTriggerRef) {
       hitTriggerRef.current = () => {
-        controllerRef.current.triggerHitReaction();
+        controllerRef.current.triggerHitReaction(hasWeapon, isGrimoireOpen);
       };
     }
     return () => {
@@ -72,12 +75,17 @@ export function Player({
         hitTriggerRef.current = null;
       }
     };
-  }, [hitTriggerRef]);
+  }, [hitTriggerRef, hasWeapon, isGrimoireOpen]);
 
-  // Configure shadows, log available clips, and locate mixamorigRightHand bone once loaded
+  // Configure shadows, log available & missing clips, and locate mixamorigRightHand bone once loaded
   useEffect(() => {
+    const clipNames = animations.map((c) => c.name);
     const clipSummary = animations.map((c) => `${c.name} (${c.duration.toFixed(2)}s)`);
+    const missing = getMissingStatesForClips(clipNames);
     console.info('[Character] Loaded model:', modelUrl, '| Clips:', clipSummary);
+    if (missing.length > 0) {
+      console.warn('[Character] Missing native clips for states:', missing.join(', '));
+    }
 
     scene.updateMatrixWorld(true);
     scene.traverse((obj) => {
@@ -141,6 +149,9 @@ export function Player({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isGrimoireOpen) return;
+      if (e.code === 'KeyQ' && !e.repeat) {
+        ctrl.triggerDodge(isFlying, isGrimoireOpen);
+      }
       ctrl.setKey(e.code, true);
     };
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -211,7 +222,7 @@ export function Player({
       dom.removeEventListener('mousedown', handleMouseDown);
       document.removeEventListener('pointerlockchange', handlePointerLock);
     };
-  }, [gl, hasWeapon, isGrimoireOpen, onPointerLockChange]);
+  }, [gl, hasWeapon, isFlying, isGrimoireOpen, onPointerLockChange]);
 
   const weaponElement = useMemo(() => {
     if (!hasWeapon) return null;

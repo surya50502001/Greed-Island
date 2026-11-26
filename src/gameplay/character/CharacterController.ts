@@ -11,6 +11,7 @@ export interface CharacterInputState {
   sprint: boolean;
   jump: boolean;
   descend: boolean;
+  block: boolean;
 }
 
 export interface CharacterStepResult {
@@ -18,9 +19,10 @@ export interface CharacterStepResult {
   horizSpeed: number;
   verticalVelocity: number;
   grounded: boolean;
-  attackProgress: number; // 0 when not attacking, 0..1 during attack
+  attackProgress: number;
   isAttackActiveHitWindow: boolean;
   hitReactionProgress: number;
+  isBlocking: boolean;
   flightTiltX: number;
   flightRollZ: number;
 }
@@ -34,21 +36,25 @@ export class CharacterController {
   private keys: Record<string, boolean> = {};
   private prevIsFlying = false;
   private pendingFlightLand = false;
+  private wasMoving = false;
 
-  // Jump / Land timers
+  // Transition timers
+  private startMovingTimer = 0;
+  private stopMovingTimer = 0;
   private jumpAnticipationTimer = 0;
   private pendingJump = false;
   private landRecoveryTimer = 0;
-
-  // Flight transition timers
   private flightTakeoffTimer = 0;
   private flightLandTimer = 0;
 
-  // Combat & hit reaction timers
+  // Combat & reaction timers
   private attackTimer = 0;
   private attackCooldown = 0;
+  private dodgeTimer = 0;
+  private dodgeCooldown = 0;
   private hitReactionTimer = 0;
   private readonly attackDuration = 0.42;
+  private readonly dodgeDuration = 0.36;
 
   // Reusable math vectors
   private readonly forwardVec = new THREE.Vector3();
@@ -69,14 +75,25 @@ export class CharacterController {
 
   public triggerAttack(hasWeapon: boolean, isGrimoireOpen: boolean): boolean {
     if (!hasWeapon || isGrimoireOpen) return false;
-    if (this.attackCooldown > 0 || this.hitReactionTimer > 0) return false;
+    if (this.attackCooldown > 0 || this.hitReactionTimer > 0 || this.dodgeTimer > 0) return false;
     this.attackTimer = this.attackDuration;
     this.attackCooldown = 0.48;
     return true;
   }
 
-  public triggerHitReaction(): void {
-    if (this.hitReactionTimer > 0) return;
+  public triggerDodge(isFlying: boolean, isGrimoireOpen: boolean): boolean {
+    if (isFlying || isGrimoireOpen || !this.grounded) return false;
+    if (this.dodgeCooldown > 0 || this.hitReactionTimer > 0) return false;
+    this.dodgeTimer = this.dodgeDuration;
+    this.dodgeCooldown = 0.7;
+    this.attackTimer = 0;
+    return true;
+  }
+
+  public triggerHitReaction(hasWeapon: boolean, isGrimoireOpen: boolean): void {
+    const input = this.readInputs(isGrimoireOpen);
+    if (hasWeapon && input.block) return; // Blocked!
+    if (this.hitReactionTimer > 0 || this.dodgeTimer > 0) return;
     this.hitReactionTimer = 0.35;
     this.attackTimer = 0;
   }
@@ -91,6 +108,7 @@ export class CharacterController {
         sprint: false,
         jump: false,
         descend: false,
+        block: false,
       };
     }
     return {
@@ -101,6 +119,7 @@ export class CharacterController {
       sprint: Boolean(this.keys['ShiftLeft'] || this.keys['ShiftRight']),
       jump: Boolean(this.keys['Space']),
       descend: Boolean(this.keys['KeyC']),
+      block: Boolean(this.keys['KeyF']),
     };
   }
 
@@ -118,10 +137,14 @@ export class CharacterController {
     // Update timers
     if (this.attackCooldown > 0) this.attackCooldown = Math.max(0, this.attackCooldown - safeDt);
     if (this.attackTimer > 0) this.attackTimer = Math.max(0, this.attackTimer - safeDt);
+    if (this.dodgeCooldown > 0) this.dodgeCooldown = Math.max(0, this.dodgeCooldown - safeDt);
+    if (this.dodgeTimer > 0) this.dodgeTimer = Math.max(0, this.dodgeTimer - safeDt);
     if (this.hitReactionTimer > 0) this.hitReactionTimer = Math.max(0, this.hitReactionTimer - safeDt);
     if (this.landRecoveryTimer > 0) this.landRecoveryTimer = Math.max(0, this.landRecoveryTimer - safeDt);
     if (this.flightTakeoffTimer > 0) this.flightTakeoffTimer = Math.max(0, this.flightTakeoffTimer - safeDt);
     if (this.flightLandTimer > 0) this.flightLandTimer = Math.max(0, this.flightLandTimer - safeDt);
+    if (this.startMovingTimer > 0) this.startMovingTimer = Math.max(0, this.startMovingTimer - safeDt);
+    if (this.stopMovingTimer > 0) this.stopMovingTimer = Math.max(0, this.stopMovingTimer - safeDt);
 
     // Detect flight toggle transitions
     if (isFlying && !this.prevIsFlying) {
@@ -141,12 +164,12 @@ export class CharacterController {
 
     const forwardInput = (input.forward ? 1 : 0) - (input.backward ? 1 : 0);
     const strafeInput = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    const isBlocking = Boolean(hasWeapon && input.block && !isFlying && this.grounded);
 
     let flightTiltX = 0;
     let flightRollZ = 0;
 
     if (isFlying) {
-      // 3D camera-directed flight
       const cosPitch = Math.cos(camPitch);
       this.forwardVec
         .set(-Math.sin(camYaw) * cosPitch, -Math.sin(camPitch), -Math.cos(camYaw) * cosPitch)
@@ -177,7 +200,6 @@ export class CharacterController {
       if (this.position.y > 95) this.position.y = 95;
       this.grounded = false;
 
-      // Smoothly face flight direction
       const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
       if (horizSpeed > 0.5) {
         this.rotateTowards(Math.atan2(this.velocity.x, this.velocity.z), 7.5, safeDt);
@@ -187,7 +209,6 @@ export class CharacterController {
       flightTiltX = (horizSpeed > 1.5 ? 0.68 : 0.25) - pitchFactor * 0.5;
       flightRollZ = -strafeInput * 0.22;
     } else {
-      // Grounded & airborne locomotion
       this.forwardVec.set(-Math.sin(camYaw), 0, -Math.cos(camYaw)).normalize();
       this.rightVec.set(Math.cos(camYaw), 0, -Math.sin(camYaw)).normalize();
 
@@ -195,16 +216,27 @@ export class CharacterController {
       this.moveDir.addScaledVector(this.forwardVec, forwardInput);
       this.moveDir.addScaledVector(this.rightVec, strafeInput);
 
-      // Normalize diagonal input so diagonal speed never exceeds cardinal speed
       if (this.moveDir.lengthSq() > 1) {
         this.moveDir.normalize();
       }
+
+      const hasMoveInput = this.moveDir.lengthSq() > 0.01;
+      if (hasMoveInput && !this.wasMoving && this.grounded) {
+        this.startMovingTimer = 0.14;
+      } else if (!hasMoveInput && this.wasMoving && this.grounded) {
+        this.stopMovingTimer = 0.16;
+      }
+      this.wasMoving = hasMoveInput;
 
       const isPureBackward = forwardInput < 0 && strafeInput === 0;
       const isPureStrafe = forwardInput === 0 && strafeInput !== 0;
 
       let targetSpeed = 0;
-      if (this.moveDir.lengthSq() > 0.01) {
+      if (this.dodgeTimer > 0) {
+        targetSpeed = 12.5;
+      } else if (isBlocking) {
+        targetSpeed = hasMoveInput ? 2.2 : 0;
+      } else if (hasMoveInput) {
         if (isPureBackward) {
           targetSpeed = 3.8;
         } else if (isPureStrafe) {
@@ -218,9 +250,11 @@ export class CharacterController {
         }
       }
 
-      const targetVx = this.moveDir.x * targetSpeed;
-      const targetVz = this.moveDir.z * targetSpeed;
-      const hasMoveInput = this.moveDir.lengthSq() > 0.01;
+      const dodgeDirX = this.dodgeTimer > 0 && !hasMoveInput ? Math.sin(this.yaw) : this.moveDir.x;
+      const dodgeDirZ = this.dodgeTimer > 0 && !hasMoveInput ? Math.cos(this.yaw) : this.moveDir.z;
+
+      const targetVx = dodgeDirX * targetSpeed;
+      const targetVz = dodgeDirZ * targetSpeed;
       const accelRate = this.grounded ? (hasMoveInput ? 10.5 : 8.5) : 3.5;
 
       this.velocity.x = THREE.MathUtils.lerp(
@@ -234,13 +268,12 @@ export class CharacterController {
         1 - Math.exp(-accelRate * safeDt)
       );
 
-      // Snap tiny residual velocity to 0 for clean Idle transition
-      if (!hasMoveInput && Math.hypot(this.velocity.x, this.velocity.z) < 0.08) {
+      if (!hasMoveInput && this.dodgeTimer <= 0 && Math.hypot(this.velocity.x, this.velocity.z) < 0.08) {
         this.velocity.x = 0;
         this.velocity.z = 0;
       }
 
-      // Jump anticipation + takeoff (only when grounded and not recovering)
+      // Jump anticipation + takeoff
       if (input.jump && this.grounded && !this.pendingJump && this.landRecoveryTimer <= 0) {
         this.pendingJump = true;
         this.jumpAnticipationTimer = 0.08;
@@ -254,7 +287,6 @@ export class CharacterController {
         }
       }
 
-      // Gravity & vertical integration
       this.velocity.y -= 28 * safeDt;
       this.position.x += this.velocity.x * safeDt;
       this.position.z += this.velocity.z * safeDt;
@@ -278,9 +310,8 @@ export class CharacterController {
         this.grounded = false;
       }
 
-      // Natural turning: face camera-forward during attacks, backward movement, or strafing
       const camForwardYaw = Math.atan2(-Math.sin(camYaw), -Math.cos(camYaw));
-      if (this.attackTimer > 0) {
+      if (this.attackTimer > 0 || isBlocking) {
         this.rotateTowards(camForwardYaw, 14.0, safeDt);
       } else if (hasMoveInput) {
         if (isPureBackward || isPureStrafe) {
@@ -292,7 +323,6 @@ export class CharacterController {
       }
     }
 
-    // Clamp to island boundary
     const distFromCenter = Math.hypot(this.position.x, this.position.z);
     const maxR = ISLAND_RADIUS - 5;
     if (distFromCenter > maxR) {
@@ -305,6 +335,7 @@ export class CharacterController {
     const state = this.resolveState(
       isFlying,
       hasWeapon,
+      isBlocking,
       horizSpeed,
       forwardInput,
       strafeInput,
@@ -324,6 +355,7 @@ export class CharacterController {
       attackProgress,
       isAttackActiveHitWindow,
       hitReactionProgress: this.hitReactionTimer > 0 ? 1 - this.hitReactionTimer / 0.35 : 0,
+      isBlocking,
       flightTiltX,
       flightRollZ,
     };
@@ -339,16 +371,21 @@ export class CharacterController {
   private resolveState(
     isFlying: boolean,
     hasWeapon: boolean,
+    isBlocking: boolean,
     horizSpeed: number,
     forwardInput: number,
     strafeInput: number,
     sprint: boolean
   ): CharacterLocomotionState {
     if (this.hitReactionTimer > 0) return 'HitReaction';
+    if (this.dodgeTimer > 0) return 'Dodge';
     if (this.attackTimer > 0) return 'Attack';
+    if (isBlocking) return 'Block';
 
     if (isFlying) {
       if (this.flightTakeoffTimer > 0) return 'FlightTakeoff';
+      if (this.velocity.y > 2.2) return 'FlightAscend';
+      if (this.velocity.y < -2.2) return 'FlightDescend';
       return horizSpeed > 1.8 ? 'FlightForward' : 'FlightHover';
     }
     if (this.flightLandTimer > 0) return 'FlightLand';
@@ -360,6 +397,7 @@ export class CharacterController {
     if (this.landRecoveryTimer > 0) return 'Land';
 
     if (horizSpeed > 0.35) {
+      if (this.startMovingTimer > 0 && horizSpeed < 3.2) return 'StartMoving';
       if (forwardInput < 0 && strafeInput === 0) return 'WalkBackward';
       if (forwardInput === 0 && strafeInput < 0) return 'StrafeLeft';
       if (forwardInput === 0 && strafeInput > 0) return 'StrafeRight';
@@ -368,6 +406,7 @@ export class CharacterController {
       return 'Walk';
     }
 
+    if (this.stopMovingTimer > 0) return 'StopMoving';
     return hasWeapon ? 'CombatIdle' : 'Idle';
   }
 }

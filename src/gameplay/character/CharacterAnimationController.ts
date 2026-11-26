@@ -15,6 +15,7 @@ export class CharacterAnimationController {
     if (available.length === 0) return;
 
     const resolved = resolveClipForState(state, available);
+    if (!resolved.clipName) return;
     const nextAction = actions[resolved.clipName];
     if (!nextAction) return;
 
