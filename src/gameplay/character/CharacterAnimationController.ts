@@ -78,6 +78,7 @@ export class CharacterAnimationController {
       } else {
         nextAction.setLoop(THREE.LoopRepeat, Infinity);
         nextAction.clampWhenFinished = false;
+        nextAction.paused = false;
         this.activeOneShotAction = null;
         this.activeOneShotState = null;
       }

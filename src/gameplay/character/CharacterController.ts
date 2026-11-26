@@ -48,12 +48,14 @@ export class CharacterController {
   private startMovingTimer = 0;
   private stopMovingTimer = 0;
   private jumpAnticipationTimer = 0;
+  private jumpStartHoldTimer = 0;
   private pendingJump = false;
   private landRecoveryTimer = 0;
   private flightTakeoffTimer = 0;
   private flightLandTimer = 0;
 
-  // Combat & reaction timers
+  // Combat, death & reaction timers
+  private isDead = false;
   private attackTimer = 0;
   private attackCooldown = 0;
   private dodgeTimer = 0;
@@ -113,7 +115,7 @@ export class CharacterController {
   }
 
   public triggerAttack(hasWeapon: boolean, isGrimoireOpen: boolean): boolean {
-    if (!hasWeapon || isGrimoireOpen) return false;
+    if (this.isDead || !hasWeapon || isGrimoireOpen) return false;
     const input = this.readInputs(isGrimoireOpen);
     if (
       this.attackCooldown > 0 ||
@@ -130,7 +132,7 @@ export class CharacterController {
   }
 
   public triggerDodge(isFlying: boolean, isGrimoireOpen: boolean): boolean {
-    if (isFlying || isGrimoireOpen || !this.grounded) return false;
+    if (this.isDead || isFlying || isGrimoireOpen || !this.grounded) return false;
     if (this.dodgeCooldown > 0 || this.hitReactionTimer > 0) return false;
     this.dodgeTimer = this.dodgeDuration;
     this.dodgeCooldown = 0.7;
@@ -139,6 +141,7 @@ export class CharacterController {
   }
 
   public triggerHitReaction(hasWeapon: boolean, isGrimoireOpen: boolean): void {
+    if (this.isDead) return;
     const input = this.readInputs(isGrimoireOpen);
     if (hasWeapon && input.block) return; // Blocked!
     if (this.hitReactionTimer > 0 || this.dodgeTimer > 0) return;
@@ -146,8 +149,26 @@ export class CharacterController {
     this.attackTimer = 0;
   }
 
+  public triggerDeath(): void {
+    if (this.isDead) return;
+    this.isDead = true;
+    this.attackTimer = 0;
+    this.dodgeTimer = 0;
+    this.hitReactionTimer = 0;
+    this.pendingJump = false;
+    this.jumpStartHoldTimer = 0;
+    this.clearInputs();
+  }
+
+  public resetDeath(): void {
+    this.isDead = false;
+  }
+
   public completeOneShotState(state: CharacterLocomotionState): void {
     switch (state) {
+      case 'JumpStart':
+        this.jumpStartHoldTimer = 0;
+        break;
       case 'Attack':
         this.attackTimer = 0;
         break;
@@ -170,7 +191,7 @@ export class CharacterController {
   }
 
   private readInputs(isGrimoireOpen: boolean): CharacterInputState {
-    if (isGrimoireOpen) {
+    if (isGrimoireOpen || this.isDead) {
       return {
         forward: false,
         backward: false,
@@ -211,6 +232,9 @@ export class CharacterController {
     if (this.dodgeCooldown > 0) this.dodgeCooldown = Math.max(0, this.dodgeCooldown - safeDt);
     if (this.dodgeTimer > 0) this.dodgeTimer = Math.max(0, this.dodgeTimer - safeDt);
     if (this.hitReactionTimer > 0) this.hitReactionTimer = Math.max(0, this.hitReactionTimer - safeDt);
+    if (this.jumpStartHoldTimer > 0) {
+      this.jumpStartHoldTimer = Math.max(0, this.jumpStartHoldTimer - safeDt);
+    }
     if (this.landRecoveryTimer > 0) this.landRecoveryTimer = Math.max(0, this.landRecoveryTimer - safeDt);
     if (this.flightTakeoffTimer > 0) this.flightTakeoffTimer = Math.max(0, this.flightTakeoffTimer - safeDt);
     if (this.flightLandTimer > 0) this.flightLandTimer = Math.max(0, this.flightLandTimer - safeDt);
@@ -355,6 +379,7 @@ export class CharacterController {
           this.pendingJump = false;
           this.velocity.y = 11.0;
           this.grounded = false;
+          this.jumpStartHoldTimer = 0.18;
         }
       }
 
@@ -365,6 +390,7 @@ export class CharacterController {
 
       const groundY = getTerrainHeight(this.position.x, this.position.z);
       if (this.position.y <= groundY) {
+        this.jumpStartHoldTimer = 0;
         if (!this.grounded && (this.velocity.y < -4.5 || this.pendingFlightLand)) {
           this.landRecoveryTimer = 0.16;
           if (this.pendingFlightLand) {
@@ -449,6 +475,7 @@ export class CharacterController {
     strafeInput: number,
     sprint: boolean
   ): CharacterLocomotionState {
+    if (this.isDead) return 'Death';
     if (this.hitReactionTimer > 0) return 'HitReaction';
     if (this.dodgeTimer > 0) return 'Dodge';
     if (this.attackTimer > 0) return 'Attack';
@@ -462,7 +489,9 @@ export class CharacterController {
     }
     if (this.flightLandTimer > 0) return 'FlightLand';
 
-    if (this.pendingJump) return 'JumpStart';
+    if (this.pendingJump || (this.jumpStartHoldTimer > 0 && !this.grounded && this.velocity.y > 0.5)) {
+      return 'JumpStart';
+    }
     if (!this.grounded) {
       return this.velocity.y > 0.5 ? 'JumpLoop' : 'Fall';
     }

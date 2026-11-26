@@ -32,16 +32,17 @@ Instead of a permanent hotbar, pressing `G` materializes an ancient 3D Grimoire 
 - `src/world/terrain.ts` — Deterministic `getTerrainHeight`, `getTerrainColor`, and prop placement.
 - `src/components/World.tsx` & `Landmarks.tsx` — Terrain mesh, ocean, sky/clouds, trees, rocks, and 4 landmarks.
 - `src/gameplay/character/` — Modular character system:
-  - `CharacterStates.ts` — Configurable `DEFAULT_CHARACTER_MODEL_URL`, 19 locomotion/combat/flight states, and `resolveClipForState` (native clip matching + honest fallbacks).
-  - `CharacterController.ts` — Grounded/airborne/flight physics, natural acceleration/deceleration, diagonal normalization, smooth turning, jump/land sync, flight landing transition, and Grimoire input freeze.
-  - `CharacterAnimationController.ts` — Crossfaded `AnimationAction` state machine with speed-matched `timeScale` and one-shot vs. loop handling.
-- `src/components/Player.tsx` — Rigged humanoid character (`Soldier.glb` by default, replaceable via `modelUrl`), over-the-shoulder camera, weapon attachment to `mixamorigRightHand`, and active-window melee hit detection.
+  - `CharacterStates.ts` — Configurable `DEFAULT_CHARACTER_MODEL_URL` (`/models/adventurer.glb`), 25 locomotion/combat/flight/death states (`CharacterLocomotionState`), and `resolveClipForState` (native clip matching + documented fallbacks).
+  - `CharacterController.ts` — Grounded/airborne/flight physics, natural acceleration/deceleration, diagonal normalization, smooth turning, `JumpStart` -> `JumpLoop` -> `Fall` -> `Land` sync, flight landing transition, `Block` / `Dodge` / `Death` state handling, and Grimoire input freeze.
+  - `CharacterAnimationController.ts` — Crossfaded `AnimationAction` state machine with `AnimationMixer` `finished` event handling, speed-matched `timeScale`, reverse playback bounds guarding, and one-shot vs. loop management.
+- `src/components/Player.tsx` — Rigged humanoid character (`public/models/adventurer.glb` by default, replaceable via `modelUrl`), automatic height normalization, over-the-shoulder camera, weapon attachment to `mixamorig:RightHand_040`, active-window melee hit detection, and multi-touch camera orbit.
+- `src/components/MobileControls.tsx` — Virtual analog joystick, action buttons (`Jump`/`Ascend`, `Descend`, `Sprint`, `Dodge`, `Attack`, `Block`, `Book`), and full input cleanup on hide/Grimoire/blur/cancel.
 - `src/components/Grimoire.tsx` & `GrimoireCard.tsx` — 3D summonable book, animated cover/pages, particle/rune effects, and interactive holographic cards.
 - `src/components/Enemies.tsx` — Patrol/chase AI, player hit callback, and defeat/respawn loop.
 - `src/components/HUD.tsx` — Minimal active-status pills, airborne flight hints, and Grimoire summon prompt (no permanent 3-card hotbar).
 - `src/App.tsx` — Canvas, lighting, `<Suspense>`, card state, and `G` / `Escape` keybindings.
 
-## Animation Asset Status (`Soldier.glb`)
-- **Available clips**: `Idle` (`1.97s`), `Walk` (`1.03s`), `Run` (`0.70s`), `TPose` (`0.03s`).
-- **Native integration**: `Idle`, `Walk`, `Jog`/`Sprint` (speed-matched `Run`).
-- **Pending external GLB clips**: `CombatIdle`, `WalkBackward`, `StrafeLeft`, `StrafeRight`, `JumpStart`, `JumpLoop`, `Fall`, `Land`, `Attack`, `HitReaction`, `Death`, `FlightTakeoff`, `FlightHover`, `FlightForward`, `FlightLand`. Pass a custom Mixamo/Blender GLB with these clip names via `<Player modelUrl="..." />` to enable them automatically.
+## Animation Asset Status (`public/models/adventurer.glb`)
+- **Source**: Sketchfab *Free Game Character - Ancient* (CC Attribution, 1k GLB, 92-joint Mixamo rig including `mixamorig:RightHand_040`).
+- **Native clips in GLB (1 total)**: `"Armature|Armature|mixamo.com|Layer0.001"` (`4.367s`, 83 channels) — mapped to `Idle`.
+- **Fallback states (24 total)**: `StartMoving`, `StopMoving`, `Walk`, `Jog`, `Sprint`, `WalkBackward`, `StrafeLeft`, `StrafeRight`, `JumpStart`, `JumpLoop`, `Fall`, `Land`, `CombatIdle`, `Attack`, `Block`, `Dodge`, `HitReaction`, `Death`, `FlightTakeoff`, `FlightHover`, `FlightForward`, `FlightAscend`, `FlightDescend`, `FlightLand` currently resolve to the embedded idle clip until dedicated Mixamo clips are combined into `public/models/adventurer.glb`.
