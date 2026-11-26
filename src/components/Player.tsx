@@ -53,7 +53,7 @@ export function Player({
   const auraGroupRef = useRef<THREE.Group>(null);
   const weaponGroupRef = useRef<THREE.Group>(null);
 
-  const { actions } = useAnimations(animations, modelRef);
+  const { actions, mixer } = useAnimations(animations, modelRef);
 
   const controllerRef = useRef<CharacterController>(new CharacterController(0, 0));
   const animControllerRef = useRef<CharacterAnimationController>(
@@ -156,13 +156,16 @@ export function Player({
     });
   }, [scene, isInvisible]);
 
-  // Cleanup animation actions on unmount
+  // Bind AnimationMixer 'finished' event and clean up animation actions on unmount
   useEffect(() => {
     const animCtrl = animControllerRef.current;
+    animCtrl.bindMixer(mixer, (finishedState) => {
+      controllerRef.current.completeOneShotState(finishedState);
+    });
     return () => {
       animCtrl.dispose(actions);
     };
-  }, [actions]);
+  }, [actions, mixer]);
 
   // Clear held inputs and release pointer lock when Grimoire opens
   useEffect(() => {

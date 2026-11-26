@@ -32,32 +32,26 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   const stickBaseRef = useRef<HTMLDivElement>(null);
   const stickPointerId = useRef<number | null>(null);
 
-  // Release all touch inputs when hidden, Grimoire opens, or window loses focus
+  // Release all touch inputs (including sprint) when hidden, Grimoire opens, or window loses focus
   useEffect(() => {
     const releaseAll = () => {
       setKnobOffset({ x: 0, y: 0 });
       stickPointerId.current = null;
+      setSprintLocked(false);
       touchBridgeRef.current?.setMove(0, 0);
+      touchBridgeRef.current?.setAction('sprint', false);
       touchBridgeRef.current?.setAction('jump', false);
       touchBridgeRef.current?.setAction('descend', false);
       touchBridgeRef.current?.setAction('block', false);
-      if (!visible) {
-        setSprintLocked(false);
-        touchBridgeRef.current?.setAction('sprint', false);
-      }
     };
 
     if (!visible || isGrimoireOpen) {
       releaseAll();
     }
 
-    const handleBlur = () => {
-      setSprintLocked(false);
-      touchBridgeRef.current?.setAction('sprint', false);
-      releaseAll();
-    };
+    const handleBlur = () => releaseAll();
     const handleVisibility = () => {
-      if (document.hidden) handleBlur();
+      if (document.hidden) releaseAll();
     };
 
     window.addEventListener('blur', handleBlur);
@@ -96,7 +90,13 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
     touchBridgeRef.current?.setMove(dx / JOYSTICK_RADIUS, -dy / JOYSTICK_RADIUS);
   };
 
-  const resetJoystick = () => {
+  const resetJoystick = (e?: React.PointerEvent<HTMLDivElement>) => {
+    if (e) {
+      const target = e.currentTarget;
+      if (target.hasPointerCapture?.(e.pointerId)) {
+        target.releasePointerCapture(e.pointerId);
+      }
+    }
     stickPointerId.current = null;
     setKnobOffset({ x: 0, y: 0 });
     touchBridgeRef.current?.setMove(0, 0);
@@ -172,10 +172,10 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
                 updateJoystick(e.clientX, e.clientY);
               }}
               onPointerUp={(e) => {
-                if (stickPointerId.current === e.pointerId) resetJoystick();
+                if (stickPointerId.current === e.pointerId) resetJoystick(e);
               }}
               onPointerCancel={(e) => {
-                if (stickPointerId.current === e.pointerId) resetJoystick();
+                if (stickPointerId.current === e.pointerId) resetJoystick(e);
               }}
               style={{
                 position: 'absolute',

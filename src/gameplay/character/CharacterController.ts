@@ -146,6 +146,29 @@ export class CharacterController {
     this.attackTimer = 0;
   }
 
+  public completeOneShotState(state: CharacterLocomotionState): void {
+    switch (state) {
+      case 'Attack':
+        this.attackTimer = 0;
+        break;
+      case 'Dodge':
+        this.dodgeTimer = 0;
+        break;
+      case 'Land':
+        this.landRecoveryTimer = 0;
+        break;
+      case 'FlightTakeoff':
+        this.flightTakeoffTimer = 0;
+        break;
+      case 'FlightLand':
+        this.flightLandTimer = 0;
+        break;
+      case 'HitReaction':
+        this.hitReactionTimer = 0;
+        break;
+    }
+  }
+
   private readInputs(isGrimoireOpen: boolean): CharacterInputState {
     if (isGrimoireOpen) {
       return {

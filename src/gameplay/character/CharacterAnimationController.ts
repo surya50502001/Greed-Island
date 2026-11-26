@@ -5,6 +5,49 @@ export class CharacterAnimationController {
   private currentState: CharacterLocomotionState | null = null;
   private currentClipName: string | null = null;
   private currentReverse = false;
+  private currentIsOneShot = false;
+  private activeOneShotAction: THREE.AnimationAction | null = null;
+  private activeOneShotState: CharacterLocomotionState | null = null;
+
+  private boundMixer: THREE.AnimationMixer | null = null;
+  private onOneShotFinishedCb: ((state: CharacterLocomotionState) => void) | null = null;
+
+  private readonly handleMixerFinished = (event: { action: THREE.AnimationAction }) => {
+    if (
+      this.activeOneShotAction &&
+      event.action === this.activeOneShotAction &&
+      this.activeOneShotState
+    ) {
+      const finishedState = this.activeOneShotState;
+      this.activeOneShotAction = null;
+      this.activeOneShotState = null;
+      this.onOneShotFinishedCb?.(finishedState);
+    }
+  };
+
+  public bindMixer(
+    mixer: THREE.AnimationMixer,
+    onOneShotFinished: (state: CharacterLocomotionState) => void
+  ): void {
+    if (this.boundMixer === mixer) {
+      this.onOneShotFinishedCb = onOneShotFinished;
+      return;
+    }
+    this.unbindMixer();
+    this.boundMixer = mixer;
+    this.onOneShotFinishedCb = onOneShotFinished;
+    mixer.addEventListener('finished', this.handleMixerFinished);
+  }
+
+  public unbindMixer(): void {
+    if (this.boundMixer) {
+      this.boundMixer.removeEventListener('finished', this.handleMixerFinished);
+      this.boundMixer = null;
+    }
+    this.onOneShotFinishedCb = null;
+    this.activeOneShotAction = null;
+    this.activeOneShotState = null;
+  }
 
   public update(
     state: CharacterLocomotionState,
@@ -20,32 +63,45 @@ export class CharacterAnimationController {
     if (!nextAction) return;
 
     const clipChanged = this.currentClipName !== resolved.clipName;
+    const stateChanged = this.currentState !== state;
     const isOneShot = Boolean(resolved.loopOnce && resolved.isNativeClip);
     const reverse = Boolean(resolved.reverse);
 
-    // Only crossfade when the underlying clip actually changes (prevents restart/snapping
-    // when multiple fallback states resolve to the same clip).
-    if (clipChanged) {
+    // Update loop & clamp settings whenever logical state OR clip changes,
+    // so looping states never stay clamped after a one-shot on a shared clip.
+    if (clipChanged || stateChanged || this.currentIsOneShot !== isOneShot) {
+      if (isOneShot) {
+        nextAction.setLoop(THREE.LoopOnce, 1);
+        nextAction.clampWhenFinished = true;
+        this.activeOneShotAction = nextAction;
+        this.activeOneShotState = state;
+      } else {
+        nextAction.setLoop(THREE.LoopRepeat, Infinity);
+        nextAction.clampWhenFinished = false;
+        this.activeOneShotAction = null;
+        this.activeOneShotState = null;
+      }
+      this.currentIsOneShot = isOneShot;
+    }
+
+    // Only crossfade & reset when the underlying clip actually changes
+    // (or when re-entering the same native one-shot state).
+    if (clipChanged || (stateChanged && isOneShot)) {
       const prevAction = this.currentClipName ? actions[this.currentClipName] : null;
       const blendDuration =
         state === 'Attack' || state === 'JumpStart' || state === 'HitReaction' ? 0.1 : 0.22;
 
-      if (isOneShot) {
-        nextAction.setLoop(THREE.LoopOnce, 1);
-        nextAction.clampWhenFinished = true;
-      } else {
-        nextAction.setLoop(THREE.LoopRepeat, Infinity);
-        nextAction.clampWhenFinished = false;
+      if (prevAction && prevAction !== nextAction) {
+        prevAction.fadeOut(blendDuration);
       }
 
-      prevAction?.fadeOut(blendDuration);
       nextAction.reset();
       nextAction.enabled = true;
       nextAction.setEffectiveWeight(1);
 
-      // Start reversed clips at the end of the clip so they don't clamp/snap at t=0
       if (reverse) {
-        nextAction.time = nextAction.getClip().duration;
+        const dur = nextAction.getClip().duration;
+        nextAction.time = dur > 0 ? dur : 0;
       }
 
       nextAction.fadeIn(blendDuration).play();
@@ -55,6 +111,14 @@ export class CharacterAnimationController {
     this.currentState = state;
     this.currentReverse = reverse;
 
+    // Guard negative timeScale playback against invalid/negative time positions
+    if (reverse && !isOneShot) {
+      const dur = nextAction.getClip().duration;
+      if (dur > 0 && (nextAction.time <= 0 || nextAction.time > dur)) {
+        nextAction.time = dur;
+      }
+    }
+
     // Match animation playback speed to ground movement speed to reduce foot sliding
     if (resolved.clipName === 'Walk') {
       const rate = THREE.MathUtils.clamp(horizSpeed / 4.6, 0.55, 1.4);
@@ -63,7 +127,7 @@ export class CharacterAnimationController {
       const rate = THREE.MathUtils.clamp(horizSpeed / 9.8, 0.72, 1.45);
       nextAction.timeScale = rate;
     } else {
-      nextAction.timeScale = 1.0;
+      nextAction.timeScale = this.currentReverse ? -1.0 : 1.0;
     }
   }
 
@@ -72,6 +136,7 @@ export class CharacterAnimationController {
   }
 
   public dispose(actions: Record<string, THREE.AnimationAction | null>): void {
+    this.unbindMixer();
     Object.values(actions).forEach((action) => {
       if (action) {
         action.stop();
@@ -81,5 +146,6 @@ export class CharacterAnimationController {
     this.currentState = null;
     this.currentClipName = null;
     this.currentReverse = false;
+    this.currentIsOneShot = false;
   }
 }
