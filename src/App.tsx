@@ -1,9 +1,9 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { Sky } from '@react-three/drei';
+import { Environment, Lightformer, Sky } from '@react-three/drei';
 import * as THREE from 'three';
 import { CardId, INVISIBILITY_DURATION, PLAYER_MAX_HP } from './types/game';
-import { getTerrainHeight } from './world/terrain';
+import { getGroundHeight } from './world/terrain';
 import { World } from './components/World';
 import { createInitialEnemies, Enemies, EnemyEntity } from './components/Enemies';
 import { Player, PlayerCombatBridge, PlayerTouchBridge } from './components/Player';
@@ -23,9 +23,10 @@ export function App() {
   const [isGrimoireOpen, setIsGrimoireOpen] = useState(false);
   const [, setPointerLocked] = useState(false);
 
-  const playerPosRef = useRef<THREE.Vector3>(
-    new THREE.Vector3(0, getTerrainHeight(0, 0), 0)
-  );
+  
+
+
+  const playerPosRef = useRef<THREE.Vector3>(new THREE.Vector3(0, getGroundHeight(0, 0), 0));
   const enemiesRef = useRef<EnemyEntity[]>(createInitialEnemies());
   const combatBridgeRef = useRef<PlayerCombatBridge | null>(null);
   const touchBridgeRef = useRef<PlayerTouchBridge | null>(null);
@@ -68,6 +69,7 @@ export function App() {
     },
     [playerHp]
   );
+
 
   const handleRevive = useCallback(() => {
     setPlayerHp(PLAYER_MAX_HP);
@@ -126,12 +128,48 @@ export function App() {
         />
         <fog attach="fog" args={['#b8ddf2', 95, 310]} />
 
-        <ambientLight intensity={0.45} />
-        <hemisphereLight args={['#bfe9ff', '#3a5f3b', 0.6]} />
+        <Environment resolution={256}>
+          <Lightformer
+            form="rect"
+            intensity={2.2}
+            color="#e0f4ff"
+            position={[0, 12, 0]}
+            rotation={[Math.PI / 2, 0, 0]}
+            scale={[24, 24, 1]}
+          />
+          <Lightformer
+            form="circle"
+            intensity={3.0}
+            color="#fff6e0"
+            position={[12, 10, 8]}
+            scale={[8, 8, 1]}
+          />
+          <Lightformer
+            form="rect"
+            intensity={1.4}
+            color="#d8f0ff"
+            position={[-10, 5, -10]}
+            rotation={[0, Math.PI / 4, 0]}
+            scale={[18, 10, 1]}
+          />
+          <Lightformer
+            form="rect"
+            intensity={1.1}
+            color="#9bbf8a"
+            position={[0, -8, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            scale={[24, 24, 1]}
+          />
+        </Environment>
+
+        <ambientLight intensity={0.7} />
+        <hemisphereLight args={['#d8f3ff', '#6b8e63', 0.9]} />
         <directionalLight
           castShadow
           position={[70, 95, 40]}
-          intensity={1.55}
+          intensity={1.85}
+          shadow-bias={-0.0003}
+          shadow-normalBias={0.03}
           shadow-mapSize-width={2048}
           shadow-mapSize-height={2048}
           shadow-camera-near={10}
@@ -195,6 +233,7 @@ export function App() {
       />
     </div>
   );
+
 }
 
 export default App;

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ISLAND_RADIUS } from '../../types/game';
-import { getTerrainHeight } from '../../world/terrain';
+import { getGroundHeight } from '../../world/terrain';
 import { CharacterLocomotionState } from './CharacterStates';
 
 export interface CharacterInputState {
@@ -82,7 +82,7 @@ export class CharacterController {
   };
 
   constructor(initialX = 0, initialZ = 0) {
-    this.position = new THREE.Vector3(initialX, getTerrainHeight(initialX, initialZ), initialZ);
+    this.position = new THREE.Vector3(initialX, getGroundHeight(initialX, initialZ), initialZ);
   }
 
   public setKey(code: string, pressed: boolean): void {
@@ -166,7 +166,7 @@ export class CharacterController {
 
   public reviveAt(x = 0, z = 0): void {
     this.isDead = false;
-    this.position.set(x, getTerrainHeight(x, z), z);
+    this.position.set(x, getGroundHeight(x, z), z);
     this.velocity.set(0, 0, 0);
     this.yaw = 0;
     this.grounded = true;
@@ -314,7 +314,7 @@ export class CharacterController {
       this.velocity.lerp(targetVel, 1 - Math.exp(-accel * safeDt));
       this.position.addScaledVector(this.velocity, safeDt);
 
-      const floorY = getTerrainHeight(this.position.x, this.position.z) + 0.4;
+      const floorY = getGroundHeight(this.position.x, this.position.z) + 0.4;
       if (this.position.y < floorY) {
         this.position.y = floorY;
         if (this.velocity.y < 0) this.velocity.y = 0;
@@ -415,7 +415,7 @@ export class CharacterController {
       this.position.z += this.velocity.z * safeDt;
       this.position.y += this.velocity.y * safeDt;
 
-      const groundY = getTerrainHeight(this.position.x, this.position.z);
+      const groundY = getGroundHeight(this.position.x, this.position.z);
       if (this.position.y <= groundY) {
         this.jumpStartHoldTimer = 0;
         if (!this.grounded && (this.velocity.y < -4.5 || this.pendingFlightLand)) {

@@ -62,6 +62,36 @@ export function getTerrainHeight(x: number, z: number): number {
 }
 
 /**
+ * Returns the walkable ground height at world (x, z), accounting for
+ * raised landmark platforms (Starting Plaza dais, Ancient Ruins floor, Forest Shrine platform).
+ */
+export function getGroundHeight(x: number, z: number): number {
+  let y = getTerrainHeight(x, z);
+
+  // Starting Plaza (0, 0): outer dais (r<=9.5..10.5, top +0.45) & inner dais (r<=6.2..6.5, top +0.56)
+  const plazaDist = Math.hypot(x, z);
+  if (plazaDist <= 6.35) {
+    y = Math.max(y, getTerrainHeight(0, 0) + 0.56);
+  } else if (plazaDist <= 10.0) {
+    y = Math.max(y, getTerrainHeight(0, 0) + 0.45);
+  }
+
+  // Ancient Ruins (-54, -46): octagonal stone floor (r<=11.5, top +0.35)
+  const ruinsDist = Math.hypot(x + 54, z + 46);
+  if (ruinsDist <= 11.5) {
+    y = Math.max(y, getTerrainHeight(-54, -46) + 0.35);
+  }
+
+  // Forest Shrine (0, 64): stone platform (r<=8.85, top +0.36)
+  const shrineDist = Math.hypot(x, z - 64);
+  if (shrineDist <= 8.85) {
+    y = Math.max(y, getTerrainHeight(0, 64) + 0.36);
+  }
+
+  return y;
+}
+
+/**
  * Returns [r, g, b] in 0..1 range for terrain vertex coloring.
  */
 export function getTerrainColor(x: number, z: number, y: number): [number, number, number] {

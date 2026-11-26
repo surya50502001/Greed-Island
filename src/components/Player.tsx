@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal, useFrame, useThree } from '@react-three/fiber';
 import { useAnimations, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
-import { getTerrainHeight } from '../world/terrain';
+import { getGroundHeight } from '../world/terrain';
 import { EnemyEntity } from './Enemies';
 import { CharacterController } from '../gameplay/character/CharacterController';
 import { CharacterAnimationController } from '../gameplay/character/CharacterAnimationController';
+import { ProceduralCharacterAnimator } from '../gameplay/character/ProceduralCharacterAnimator';
 import {
   DEFAULT_CHARACTER_MODEL_URL,
   getMissingStatesForClips,
@@ -69,6 +70,8 @@ export function Player({
   const animControllerRef = useRef<CharacterAnimationController>(
     new CharacterAnimationController()
   );
+  const proceduralAnimRef = useRef<ProceduralCharacterAnimator>(new ProceduralCharacterAnimator());
+  const useProceduralRef = useRef<boolean>(false);
 
   const [rightHandBone, setRightHandBone] = useState<THREE.Object3D | null>(null);
   const [handInvScale, setHandInvScale] = useState<number>(1);
@@ -130,12 +133,31 @@ export function Player({
       console.warn('[Character] Missing native clips for states:', missing.join(', '));
     }
 
+    const hasNativeLocomotion = clipNames.includes('Walk') || clipNames.includes('Run');
+    const procOk = !hasNativeLocomotion && proceduralAnimRef.current.init(scene);
+    useProceduralRef.current = procOk;
+    if (procOk) {
+      mixer.stopAllAction();
+    }
+
     scene.updateMatrixWorld(true);
     let hand: THREE.Object3D | null = null;
     scene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
-        obj.castShadow = true;
-        obj.receiveShadow = true;
+        const mesh = obj as THREE.Mesh;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const mat of materials) {
+          if (mat && (mat as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+            const std = mat as THREE.MeshStandardMaterial;
+            std.envMapIntensity = 1.45;
+            if (std.aoMap) {
+              std.aoMapIntensity = 0.45;
+            }
+            std.needsUpdate = true;
+          }
+        }
       }
       if (!hand && /RightHand(_\d+)?$/i.test(obj.name)) {
         hand = obj;
@@ -375,13 +397,31 @@ export function Player({
     // Sync shared player position ref for Enemies & World
     playerPosRef.current.copy(ctrl.position);
 
-    // Update animation state machine & speed-matched blending
-    animControllerRef.current.update(step.state, step.horizSpeed, actions);
-
     // Update character root transform
     if (groupRef.current) {
       groupRef.current.position.copy(ctrl.position);
       groupRef.current.rotation.y = ctrl.yaw;
+    }
+
+    // Update animation state machine (procedural Mixamo rig if native locomotion clips are absent)
+    if (useProceduralRef.current) {
+      proceduralAnimRef.current.update(dt, step, hasWeapon, clock.getElapsedTime());
+      if (modelRef.current && groupRef.current && step.grounded && step.state !== 'Death') {
+        modelRef.current.updateMatrixWorld(true);
+        const lowestFootY = proceduralAnimRef.current.getLowestFootLocalY(groupRef.current);
+        if (lowestFootY !== null) {
+          const desiredSoleClearance = 0.045;
+          modelRef.current.position.y += desiredSoleClearance - lowestFootY;
+        }
+      } else if (modelRef.current && !step.grounded) {
+        modelRef.current.position.y = THREE.MathUtils.lerp(
+          modelRef.current.position.y,
+          modelOffsetY,
+          1 - Math.exp(-12 * dt)
+        );
+      }
+    } else {
+      animControllerRef.current.update(step.state, step.horizSpeed, actions);
     }
 
     // Subtle posture layer for flight tilt, landing squash, hit stagger, & attack anticipation/recovery
@@ -496,7 +536,7 @@ export function Player({
     const camZ = ctrl.position.z + Math.cos(yaw) * horizDist + rightZ * shoulderOffset;
     let camY = lookAtY + camDist * Math.sin(pitch);
 
-    const terrainUnderCam = getTerrainHeight(camX, camZ) + 0.6;
+    const terrainUnderCam = getGroundHeight(camX, camZ) + 0.6;
     if (camY < terrainUnderCam) camY = terrainUnderCam;
 
     camPosRef.current.set(camX, camY, camZ);
@@ -507,7 +547,7 @@ export function Player({
   const isSoldierModel = modelUrl.includes('Soldier.glb');
 
   return (
-    <group ref={groupRef} position={[0, getTerrainHeight(0, 0), 0]}>
+    <group ref={groupRef} position={[0, getGroundHeight(0, 0), 0]}>
       <group ref={tiltGroupRef}>
         <group
           ref={modelRef}
