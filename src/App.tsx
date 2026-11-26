@@ -116,7 +116,13 @@ export function App() {
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       <Canvas
-        shadows
+        shadows="soft"
+        dpr={[1, 2]}
+        gl={{
+          antialias: true,
+          toneMapping: THREE.ACESFilmicToneMapping,
+          toneMappingExposure: 1.05,
+        }}
         camera={{ fov: 60, near: 0.1, far: 600, position: [0, 6, 10] }}
         onContextMenu={(e) => e.preventDefault()}
       >
@@ -180,15 +186,15 @@ export function App() {
           shadow-camera-bottom={-120}
         />
 
-        <World />
-        <Enemies
-          enemiesRef={enemiesRef}
-          playerPosRef={playerPosRef}
-          isInvisible={isInvisible}
-          isPlayerDead={isDead}
-          onPlayerHit={handlePlayerHit}
-        />
         <Suspense fallback={null}>
+          <World />
+          <Enemies
+            enemiesRef={enemiesRef}
+            playerPosRef={playerPosRef}
+            isInvisible={isInvisible}
+            isPlayerDead={isDead}
+            onPlayerHit={handlePlayerHit}
+          />
           <Player
             playerPosRef={playerPosRef}
             enemiesRef={enemiesRef}

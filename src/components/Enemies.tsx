@@ -1,11 +1,14 @@
-import { useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
+import { useAnimations, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
-import { getTerrainHeight } from '../world/terrain';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { getGroundHeight, getTerrainHeight } from '../world/terrain';
 import { ENEMY_ATTACK_DAMAGE, ENEMY_MAX_HP } from '../gameplay/combat/HealthSystem';
 
 export interface EnemyEntity {
   id: string;
+  species: 'wolf' | 'spider';
   home: THREE.Vector3;
   position: THREE.Vector3;
   patrolTarget: THREE.Vector3;
@@ -23,22 +26,23 @@ export interface EnemyEntity {
 }
 
 export function createInitialEnemies(): EnemyEntity[] {
-  const spawns: Array<[number, number, number]> = [
-    [-38, -32, 12],
-    [-64, -36, 10],
-    [-46, -60, 11],
-    [28, -28, 13],
-    [42, 26, 14],
-    [-26, 44, 12],
-    [16, 48, 11],
-    [46, -62, 10],
+  const spawns: Array<[number, number, number, 'wolf' | 'spider']> = [
+    [-38, -32, 12, 'spider'],
+    [-64, -36, 10, 'wolf'],
+    [-46, -60, 11, 'spider'],
+    [28, -28, 13, 'wolf'],
+    [42, 26, 14, 'wolf'],
+    [-26, 44, 12, 'wolf'],
+    [16, 48, 11, 'spider'],
+    [46, -62, 10, 'spider'],
   ];
 
-  return spawns.map(([x, z, radius], idx) => {
+  return spawns.map(([x, z, radius, species], idx) => {
     const y = getTerrainHeight(x, z);
     const home = new THREE.Vector3(x, y, z);
     return {
       id: `enemy-${idx}`,
+      species,
       home: home.clone(),
       position: home.clone(),
       patrolTarget: new THREE.Vector3(x + radius * 0.6, y, z + radius * 0.4),
@@ -65,50 +69,181 @@ interface EnemiesProps {
   onPlayerHit?: (damage: number, enemyId: string) => void;
 }
 
-function EnemyMesh({ enemy }: { enemy: EnemyEntity }) {
+function EnemyCreature({ enemy }: { enemy: EnemyEntity }) {
+  const url =
+    enemy.species === 'wolf' ? '/models/enemies/Wolf.glb' : '/models/enemies/Spider.glb';
+  const { scene, animations } = useGLTF(url);
+
   const groupRef = useRef<THREE.Group>(null);
-  const bodyMatRef = useRef<THREE.MeshStandardMaterial>(null);
-  const eyeMatRef = useRef<THREE.MeshStandardMaterial>(null);
-  const coreRef = useRef<THREE.Mesh>(null);
+  const modelWrapRef = useRef<THREE.Group>(null);
   const hpBarGroupRef = useRef<THREE.Group>(null);
   const hpFillRef = useRef<THREE.Mesh>(null);
 
-  useFrame(({ clock, camera }, delta) => {
+  const currentClipRef = useRef<string | null>(null);
+  const attackAnimTimerRef = useRef(0);
+  const hitAnimTimerRef = useRef(0);
+  const deathTimerRef = useRef(0);
+  const prevAttackCooldownRef = useRef(0);
+  const prevHpRef = useRef(enemy.maxHp);
+  const prevAliveRef = useRef(true);
+  const smoothYawRef = useRef(enemy.yaw);
+
+  const { cloned, normScale, offsetY, matList } = useMemo(() => {
+    const c = cloneSkinned(scene);
+    c.updateMatrixWorld(true);
+    const mats: THREE.MeshStandardMaterial[] = [];
+    c.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        const mesh = obj as THREE.Mesh;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        if (mesh.material) {
+          const clonedMat = Array.isArray(mesh.material)
+            ? mesh.material.map((m) => m.clone())
+            : mesh.material.clone();
+          mesh.material = clonedMat;
+          const arr = Array.isArray(clonedMat) ? clonedMat : [clonedMat];
+          arr.forEach((m) => {
+            if ((m as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+              mats.push(m as THREE.MeshStandardMaterial);
+            }
+          });
+        }
+      }
+    });
+
+    const box = new THREE.Box3().setFromObject(c);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const targetH = enemy.species === 'wolf' ? 1.25 : 1.1;
+    const s = size.y > 0.01 ? targetH / size.y : 1;
+    const oy = isFinite(box.min.y) ? -box.min.y * s : 0;
+
+    return { cloned: c, normScale: s, offsetY: oy, matList: mats };
+  }, [scene, enemy.species]);
+
+  const { actions } = useAnimations(animations, modelWrapRef);
+
+  useEffect(() => {
+    return () => {
+      Object.values(actions).forEach((a) => a?.stop());
+      matList.forEach((m) => m.dispose());
+    };
+  }, [actions, matList]);
+
+  useFrame(({ camera }, delta) => {
+    const dt = Math.min(delta, 0.05);
     const g = groupRef.current;
     if (!g) return;
 
-    g.visible = enemy.alive;
-    if (!enemy.alive) return;
-
-    const bob = Math.sin(clock.getElapsedTime() * (enemy.chasing ? 7 : 3.5) + enemy.home.x) * 0.14;
-    g.position.set(enemy.position.x, enemy.position.y + 1.05 + bob, enemy.position.z);
-    g.rotation.y = enemy.yaw;
-
-    if (coreRef.current) {
-      coreRef.current.rotation.y += delta * (enemy.chasing ? 4.0 : 1.5);
+    // Detect state transitions for one-shot animations
+    if (enemy.attackCooldown > prevAttackCooldownRef.current + 0.3) {
+      attackAnimTimerRef.current = 0.55;
     }
+    prevAttackCooldownRef.current = enemy.attackCooldown;
 
-    if (bodyMatRef.current) {
-      if (enemy.hitFlash > 0) {
-        bodyMatRef.current.color.set('#ffffff');
-        bodyMatRef.current.emissive.set('#ff4d4d');
-        bodyMatRef.current.emissiveIntensity = 1.4;
+    if (enemy.hp < prevHpRef.current && enemy.alive) {
+      hitAnimTimerRef.current = 0.35;
+    }
+    prevHpRef.current = enemy.hp;
+
+    if (!enemy.alive && prevAliveRef.current) {
+      deathTimerRef.current = 1.3;
+    }
+    if (enemy.alive && !prevAliveRef.current) {
+      deathTimerRef.current = 0;
+    }
+    prevAliveRef.current = enemy.alive;
+
+    if (attackAnimTimerRef.current > 0) attackAnimTimerRef.current -= dt;
+    if (hitAnimTimerRef.current > 0) hitAnimTimerRef.current -= dt;
+    if (!enemy.alive && deathTimerRef.current > 0) deathTimerRef.current -= dt;
+
+    g.visible = enemy.alive || deathTimerRef.current > 0;
+    if (!g.visible) return;
+
+    g.position.set(enemy.position.x, enemy.position.y, enemy.position.z);
+
+    // Smooth yaw turning
+    let diff = enemy.yaw - smoothYawRef.current;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    smoothYawRef.current += diff * Math.min(1, 10 * dt);
+    g.rotation.y = smoothYawRef.current;
+
+    // Choose clip based on species & state
+    let desiredClip = '';
+    let isOneShot = false;
+    let timeScale = 1.0;
+
+    if (enemy.species === 'wolf') {
+      if (!enemy.alive) {
+        desiredClip = 'AnimalArmature|Death';
+        isOneShot = true;
+      } else if (hitAnimTimerRef.current > 0) {
+        desiredClip = 'AnimalArmature|Idle_HitReact_Left';
+        isOneShot = true;
+      } else if (attackAnimTimerRef.current > 0) {
+        desiredClip = 'AnimalArmature|Attack';
+        isOneShot = true;
+      } else if (enemy.chasing) {
+        desiredClip = 'AnimalArmature|Gallop';
+        timeScale = 1.25;
       } else {
-        bodyMatRef.current.color.set(enemy.chasing ? '#4c1d3d' : '#2d2942');
-        bodyMatRef.current.emissive.set(enemy.chasing ? '#7f1d1d' : '#1e1b2e');
-        bodyMatRef.current.emissiveIntensity = enemy.chasing ? 0.5 : 0.15;
+        desiredClip = 'AnimalArmature|Walk';
+        timeScale = 1.0;
+      }
+    } else {
+      if (!enemy.alive) {
+        desiredClip = 'SpiderArmature|Spider_Death';
+        isOneShot = true;
+      } else if (attackAnimTimerRef.current > 0) {
+        desiredClip = 'SpiderArmature|Spider_Attack';
+        isOneShot = true;
+      } else if (enemy.chasing) {
+        desiredClip = 'SpiderArmature|Spider_Walk';
+        timeScale = 1.7;
+      } else {
+        desiredClip = 'SpiderArmature|Spider_Walk';
+        timeScale = 0.95;
       }
     }
 
-    if (eyeMatRef.current) {
-      eyeMatRef.current.color.set(enemy.chasing ? '#ff3b3b' : '#f59e0b');
-      eyeMatRef.current.emissive.set(enemy.chasing ? '#ff1e1e' : '#d97706');
-      eyeMatRef.current.emissiveIntensity = enemy.chasing ? 2.4 : 1.4;
+    if (desiredClip && actions[desiredClip] && currentClipRef.current !== desiredClip) {
+      const prev = currentClipRef.current ? actions[currentClipRef.current] : null;
+      const next = actions[desiredClip]!;
+      if (prev && prev !== next) prev.fadeOut(0.16);
+      next.reset();
+      next.enabled = true;
+      if (isOneShot) {
+        next.setLoop(THREE.LoopOnce, 1);
+        next.clampWhenFinished = true;
+      } else {
+        next.setLoop(THREE.LoopRepeat, Infinity);
+        next.clampWhenFinished = false;
+      }
+      next.fadeIn(0.16).play();
+      currentClipRef.current = desiredClip;
+    }
+
+    if (currentClipRef.current && actions[currentClipRef.current]) {
+      actions[currentClipRef.current]!.timeScale = timeScale;
+    }
+
+    // Hit flash tint
+    for (const mat of matList) {
+      if (enemy.hitFlash > 0) {
+        mat.emissive.set('#ef4444');
+        mat.emissiveIntensity = 1.2;
+      } else {
+        mat.emissive.set('#000000');
+        mat.emissiveIntensity = 0;
+      }
     }
 
     // Overhead HP bar when damaged
     if (hpBarGroupRef.current && hpFillRef.current) {
-      const showHp = enemy.hp < enemy.maxHp;
+      const showHp = enemy.alive && enemy.hp < enemy.maxHp;
       hpBarGroupRef.current.visible = showHp;
       if (showHp) {
         hpBarGroupRef.current.lookAt(camera.position);
@@ -121,33 +256,12 @@ function EnemyMesh({ enemy }: { enemy: EnemyEntity }) {
 
   return (
     <group ref={groupRef}>
-      {/* Main golem/stalker body */}
-      <mesh castShadow>
-        <dodecahedronGeometry args={[0.85, 0]} />
-        <meshStandardMaterial ref={bodyMatRef} color="#2d2942" roughness={0.6} flatShading />
-      </mesh>
-      {/* Floating shoulder shards */}
-      <mesh castShadow position={[-0.95, 0.25, 0]} rotation={[0.3, 0.2, 0.4]}>
-        <octahedronGeometry args={[0.32, 0]} />
-        <meshStandardMaterial color="#3f3a5c" roughness={0.6} />
-      </mesh>
-      <mesh castShadow position={[0.95, 0.25, 0]} rotation={[-0.3, -0.2, -0.4]}>
-        <octahedronGeometry args={[0.32, 0]} />
-        <meshStandardMaterial color="#3f3a5c" roughness={0.6} />
-      </mesh>
-      {/* Glowing eye */}
-      <mesh ref={coreRef} position={[0, 0.15, 0.72]}>
-        <octahedronGeometry args={[0.24, 0]} />
-        <meshStandardMaterial
-          ref={eyeMatRef}
-          color="#f59e0b"
-          emissive="#d97706"
-          emissiveIntensity={1.4}
-        />
-      </mesh>
+      <group ref={modelWrapRef} position={[0, offsetY, 0]} scale={normScale}>
+        <primitive object={cloned} />
+      </group>
 
       {/* Overhead Health Bar */}
-      <group ref={hpBarGroupRef} position={[0, 1.35, 0]} visible={false}>
+      <group ref={hpBarGroupRef} position={[0, 1.65, 0]} visible={false}>
         <mesh>
           <planeGeometry args={[1.26, 0.16]} />
           <meshBasicMaterial color="#0f172a" transparent opacity={0.85} side={THREE.DoubleSide} />
@@ -240,7 +354,7 @@ export function Enemies({
           const r = 4 + Math.random() * enemy.patrolRadius;
           const nx = enemy.home.x + Math.cos(angle) * r;
           const nz = enemy.home.z + Math.sin(angle) * r;
-          enemy.patrolTarget.set(nx, getTerrainHeight(nx, nz), nz);
+          enemy.patrolTarget.set(nx, getGroundHeight(nx, nz), nz);
         } else {
           tempVec.current.normalize();
           const speed = 2.6;
@@ -250,15 +364,18 @@ export function Enemies({
         }
       }
 
-      enemy.position.y = getTerrainHeight(enemy.position.x, enemy.position.z);
+      enemy.position.y = getGroundHeight(enemy.position.x, enemy.position.z);
     }
   });
 
   return (
     <group>
       {enemiesRef.current.map((enemy) => (
-        <EnemyMesh key={enemy.id} enemy={enemy} />
+        <EnemyCreature key={enemy.id} enemy={enemy} />
       ))}
     </group>
   );
 }
+
+useGLTF.preload('/models/enemies/Wolf.glb');
+useGLTF.preload('/models/enemies/Spider.glb');

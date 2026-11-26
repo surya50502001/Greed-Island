@@ -6,7 +6,7 @@ import { getGroundHeight } from '../world/terrain';
 import { EnemyEntity } from './Enemies';
 import { CharacterController } from '../gameplay/character/CharacterController';
 import { CharacterAnimationController } from '../gameplay/character/CharacterAnimationController';
-import { ProceduralCharacterAnimator } from '../gameplay/character/ProceduralCharacterAnimator';
+import { buildHumanAnimationClips } from '../gameplay/character/HumanAnimationClips';
 import {
   DEFAULT_CHARACTER_MODEL_URL,
   getMissingStatesForClips,
@@ -56,6 +56,7 @@ export function Player({
 }: PlayerProps) {
   const { camera, gl } = useThree();
   const { scene, animations } = useGLTF(modelUrl);
+  const animSrc = useGLTF('/models/animations_mixamo.glb');
 
   const groupRef = useRef<THREE.Group>(null);
   const tiltGroupRef = useRef<THREE.Group>(null);
@@ -64,14 +65,20 @@ export function Player({
   const auraGroupRef = useRef<THREE.Group>(null);
   const weaponGroupRef = useRef<THREE.Group>(null);
 
-  const { actions, mixer } = useAnimations(animations, modelRef);
+  const generatedClips = useMemo(() => {
+    const hasNativeLocomotion = animations.some((c) => c.name === 'Walk' || c.name === 'Run');
+    if (hasNativeLocomotion) return animations;
+    return buildHumanAnimationClips(scene, animSrc.scene, animSrc.animations);
+  }, [scene, animations, animSrc.scene, animSrc.animations]);
+
+  const { actions, mixer } = useAnimations(generatedClips, modelRef);
 
   const controllerRef = useRef<CharacterController>(new CharacterController(0, 0));
   const animControllerRef = useRef<CharacterAnimationController>(
     new CharacterAnimationController()
   );
-  const proceduralAnimRef = useRef<ProceduralCharacterAnimator>(new ProceduralCharacterAnimator());
-  const useProceduralRef = useRef<boolean>(false);
+  const footBonesRef = useRef<THREE.Object3D[]>([]);
+  const footPosRef = useRef(new THREE.Vector3());
 
   const [rightHandBone, setRightHandBone] = useState<THREE.Object3D | null>(null);
   const [handInvScale, setHandInvScale] = useState<number>(1);
@@ -125,21 +132,16 @@ export function Player({
 
   // Configure shadows, PBR lighting, normalize height to ~1.85m, and locate RightHand bone
   useEffect(() => {
-    const clipNames = animations.map((c) => c.name);
+    const clipNames = generatedClips.map((c) => c.name);
     const missing = getMissingStatesForClips(clipNames);
-    if (missing.length > 0 && clipNames.length > 0) {
-      console.info('[Character] Using procedural animation rig for:', modelUrl);
-    }
-
-    const hasNativeLocomotion = clipNames.includes('Walk') || clipNames.includes('Run');
-    const procOk = !hasNativeLocomotion && proceduralAnimRef.current.init(scene);
-    useProceduralRef.current = procOk;
-    if (procOk) {
-      mixer.stopAllAction();
+    console.info('[Character] Loaded model:', modelUrl, '| Clips:', clipNames);
+    if (missing.length > 0) {
+      console.warn('[Character] Missing clips for states:', missing.join(', '));
     }
 
     scene.updateMatrixWorld(true);
     let hand: THREE.Object3D | null = null;
+    const feet: THREE.Object3D[] = [];
     scene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         const mesh = obj as THREE.Mesh;
@@ -160,7 +162,11 @@ export function Player({
       if (!hand && /RightHand(_\d+)?$/i.test(obj.name)) {
         hand = obj;
       }
+      if (/^(Left|Right)(ToeBase|Foot)(_\d+)?$/i.test(obj.name)) {
+        feet.push(obj);
+      }
     });
+    footBonesRef.current = feet;
 
     // Normalize model height to ~1.85 units and ground feet at y=0
     const box = new THREE.Box3().setFromObject(scene);
@@ -176,7 +182,7 @@ export function Player({
       setHandInvScale(1 / ((worldScale.x || 1) * normScale));
       setRightHandBone(hand);
     }
-  }, [scene, animations, mixer, modelUrl]);
+  }, [scene, generatedClips, modelUrl]);
 
   // Apply 0.25 opacity to character meshes when [3] Invisibility is active
   useEffect(() => {
@@ -401,25 +407,30 @@ export function Player({
       groupRef.current.rotation.y = ctrl.yaw;
     }
 
-    // Update animation state machine (procedural Mixamo/RPM rig when native locomotion clips are absent)
-    if (useProceduralRef.current) {
-      proceduralAnimRef.current.update(dt, step, hasWeapon, clock.getElapsedTime());
-      if (modelRef.current && groupRef.current && step.grounded && step.state !== 'Death') {
+    // Update animation state machine & speed-matched AnimationMixer blending
+    animControllerRef.current.update(step.state, step.horizSpeed, actions);
+
+    // Keep feet grounded on terrain/platforms during grounded animation states
+    if (modelRef.current && groupRef.current && step.grounded && step.state !== 'Death') {
+      const feet = footBonesRef.current;
+      if (feet.length > 0) {
         modelRef.current.updateMatrixWorld(true);
-        const lowestFootY = proceduralAnimRef.current.getLowestFootLocalY(groupRef.current);
-        if (lowestFootY !== null) {
-          const desiredSoleClearance = 0.042;
-          modelRef.current.position.y += desiredSoleClearance - lowestFootY;
+        let minFootY = Infinity;
+        for (const bone of feet) {
+          bone.getWorldPosition(footPosRef.current);
+          groupRef.current.worldToLocal(footPosRef.current);
+          if (footPosRef.current.y < minFootY) minFootY = footPosRef.current.y;
         }
-      } else if (modelRef.current && !step.grounded) {
-        modelRef.current.position.y = THREE.MathUtils.lerp(
-          modelRef.current.position.y,
-          modelOffsetY,
-          1 - Math.exp(-12 * dt)
-        );
+        if (minFootY < Infinity) {
+          modelRef.current.position.y += 0.042 - minFootY;
+        }
       }
-    } else {
-      animControllerRef.current.update(step.state, step.horizSpeed, actions);
+    } else if (modelRef.current && !step.grounded) {
+      modelRef.current.position.y = THREE.MathUtils.lerp(
+        modelRef.current.position.y,
+        modelOffsetY,
+        1 - Math.exp(-12 * dt)
+      );
     }
 
     // Subtle posture layer for flight tilt, landing squash, hit stagger, & attack anticipation/recovery
@@ -590,3 +601,4 @@ export function Player({
 }
 
 useGLTF.preload(DEFAULT_CHARACTER_MODEL_URL);
+useGLTF.preload('/models/animations_mixamo.glb');

@@ -59,11 +59,11 @@ export const STATE_CLIP_CANDIDATES: Record<CharacterLocomotionState, string[]> =
   Dodge: ['Dodge', 'Roll', 'Evade'],
   HitReaction: ['HitReaction', 'Hit', 'Damage'],
   Death: ['Death', 'Die'],
-  FlightTakeoff: ['FlightTakeoff', 'Takeoff'],
+  FlightTakeoff: ['FlightTakeoff', 'Takeoff', 'JumpStart'],
   FlightHover: ['FlightHover', 'Hover'],
   FlightForward: ['FlightForward', 'Fly'],
-  FlightAscend: ['FlightAscend', 'FlyUp'],
-  FlightDescend: ['FlightDescend', 'FlyDown'],
+  FlightAscend: ['FlightAscend', 'FlyUp', 'FlightForward'],
+  FlightDescend: ['FlightDescend', 'FlyDown', 'FlightHover'],
   FlightLand: ['FlightLand', 'Land'],
 };
 
