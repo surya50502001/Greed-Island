@@ -1,11 +1,17 @@
-import { useEffect, useMemo, useRef } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal, useFrame, useThree } from '@react-three/fiber';
+import { useAnimations, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { getGroundHeight } from '../world/terrain';
 import { EnemyEntity } from './Enemies';
-import { CharacterController, CharacterStepResult } from '../gameplay/character/CharacterController';
+import { CharacterController } from '../gameplay/character/CharacterController';
+import { CharacterAnimationController } from '../gameplay/character/CharacterAnimationController';
+import { ProceduralCharacterAnimator } from '../gameplay/character/ProceduralCharacterAnimator';
+import {
+  DEFAULT_CHARACTER_MODEL_URL,
+  getMissingStatesForClips,
+} from '../gameplay/character/CharacterStates';
 import { PLAYER_ATTACK_DAMAGE } from '../gameplay/combat/HealthSystem';
-import { HumanCharacter } from './HumanCharacter';
 
 export interface PlayerTouchBridge {
   setMove: (x: number, y: number) => void;
@@ -36,6 +42,7 @@ interface PlayerProps {
 }
 
 export function Player({
+  modelUrl = DEFAULT_CHARACTER_MODEL_URL,
   playerPosRef,
   enemiesRef,
   isFlying,
@@ -48,26 +55,28 @@ export function Player({
   onPointerLockChange,
 }: PlayerProps) {
   const { camera, gl } = useThree();
+  const { scene, animations } = useGLTF(modelUrl);
 
   const groupRef = useRef<THREE.Group>(null);
   const tiltGroupRef = useRef<THREE.Group>(null);
+  const modelRef = useRef<THREE.Group>(null);
   const slashTrailRef = useRef<THREE.Mesh>(null);
   const auraGroupRef = useRef<THREE.Group>(null);
   const weaponGroupRef = useRef<THREE.Group>(null);
 
+  const { actions, mixer } = useAnimations(animations, modelRef);
+
   const controllerRef = useRef<CharacterController>(new CharacterController(0, 0));
-  const stepRef = useRef<CharacterStepResult>({
-    state: 'Idle',
-    horizSpeed: 0,
-    verticalVelocity: 0,
-    grounded: true,
-    attackProgress: 0,
-    isAttackActiveHitWindow: false,
-    hitReactionProgress: 0,
-    isBlocking: false,
-    flightTiltX: 0,
-    flightRollZ: 0,
-  });
+  const animControllerRef = useRef<CharacterAnimationController>(
+    new CharacterAnimationController()
+  );
+  const proceduralAnimRef = useRef<ProceduralCharacterAnimator>(new ProceduralCharacterAnimator());
+  const useProceduralRef = useRef<boolean>(false);
+
+  const [rightHandBone, setRightHandBone] = useState<THREE.Object3D | null>(null);
+  const [handInvScale, setHandInvScale] = useState<number>(1);
+  const [modelNormScale, setModelNormScale] = useState<number>(1);
+  const [modelOffsetY, setModelOffsetY] = useState<number>(0);
 
   const camYawRef = useRef(Math.PI);
   const camPitchRef = useRef(0.14);
@@ -113,6 +122,89 @@ export function Player({
       if (touchBridgeRef) touchBridgeRef.current = null;
     };
   }, [combatBridgeRef, touchBridgeRef, hasWeapon, isFlying, isGrimoireOpen]);
+
+  // Configure shadows, PBR lighting, normalize height to ~1.85m, and locate RightHand bone
+  useEffect(() => {
+    const clipNames = animations.map((c) => c.name);
+    const missing = getMissingStatesForClips(clipNames);
+    if (missing.length > 0 && clipNames.length > 0) {
+      console.info('[Character] Using procedural animation rig for:', modelUrl);
+    }
+
+    const hasNativeLocomotion = clipNames.includes('Walk') || clipNames.includes('Run');
+    const procOk = !hasNativeLocomotion && proceduralAnimRef.current.init(scene);
+    useProceduralRef.current = procOk;
+    if (procOk) {
+      mixer.stopAllAction();
+    }
+
+    scene.updateMatrixWorld(true);
+    let hand: THREE.Object3D | null = null;
+    scene.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        const mesh = obj as THREE.Mesh;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const mat of materials) {
+          if (mat && (mat as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+            const std = mat as THREE.MeshStandardMaterial;
+            std.envMapIntensity = 1.35;
+            if (std.aoMap) {
+              std.aoMapIntensity = 0.45;
+            }
+            std.needsUpdate = true;
+          }
+        }
+      }
+      if (!hand && /RightHand(_\d+)?$/i.test(obj.name)) {
+        hand = obj;
+      }
+    });
+
+    // Normalize model height to ~1.85 units and ground feet at y=0
+    const box = new THREE.Box3().setFromObject(scene);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const normScale = size.y > 0.01 ? 1.85 / size.y : 1;
+    setModelNormScale(normScale);
+    setModelOffsetY(-box.min.y * normScale);
+
+    if (hand) {
+      const worldScale = new THREE.Vector3();
+      (hand as THREE.Object3D).getWorldScale(worldScale);
+      setHandInvScale(1 / ((worldScale.x || 1) * normScale));
+      setRightHandBone(hand);
+    }
+  }, [scene, animations, mixer, modelUrl]);
+
+  // Apply 0.25 opacity to character meshes when [3] Invisibility is active
+  useEffect(() => {
+    scene.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        const mesh = obj as THREE.Mesh;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const mat of materials) {
+          if (!mat) continue;
+          mat.transparent = isInvisible;
+          mat.opacity = isInvisible ? 0.25 : 1.0;
+          mat.depthWrite = !isInvisible;
+          mat.needsUpdate = true;
+        }
+      }
+    });
+  }, [scene, isInvisible]);
+
+  // Bind AnimationMixer 'finished' event and clean up animation actions on unmount
+  useEffect(() => {
+    const animCtrl = animControllerRef.current;
+    animCtrl.bindMixer(mixer, (finishedState) => {
+      controllerRef.current.completeOneShotState(finishedState);
+    });
+    return () => {
+      animCtrl.dispose(actions);
+    };
+  }, [actions, mixer]);
 
   // Clear held inputs and release pointer lock when Grimoire opens or player dies
   useEffect(() => {
@@ -262,19 +354,20 @@ export function Player({
     return (
       <group
         ref={weaponGroupRef}
-        position={[0, -0.02, 0.04]}
+        scale={handInvScale}
+        position={[0, 0.08 * handInvScale, 0.04 * handInvScale]}
         rotation={[Math.PI / 2, 0, 0]}
       >
         <mesh>
-          <cylinderGeometry args={[0.028, 0.028, 0.24, 8]} />
+          <cylinderGeometry args={[0.035, 0.035, 0.28, 8]} />
           <meshStandardMaterial color="#1f2937" metalness={0.5} roughness={0.4} />
         </mesh>
-        <mesh position={[0, 0.12, 0]}>
-          <boxGeometry args={[0.24, 0.05, 0.075]} />
+        <mesh position={[0, 0.14, 0]}>
+          <boxGeometry args={[0.28, 0.06, 0.09]} />
           <meshStandardMaterial color="#fbbf24" metalness={0.7} roughness={0.25} />
         </mesh>
-        <mesh position={[0, 0.68, 0]}>
-          <boxGeometry args={[0.07, 1.08, 0.025]} />
+        <mesh position={[0, 0.78, 0]}>
+          <boxGeometry args={[0.085, 1.24, 0.03]} />
           <meshStandardMaterial
             color="#67e8f9"
             emissive="#06b6d4"
@@ -284,7 +377,7 @@ export function Player({
         </mesh>
       </group>
     );
-  }, [hasWeapon]);
+  }, [hasWeapon, handInvScale]);
 
   useFrame(({ clock }, delta) => {
     const dt = Math.min(delta, 0.05);
@@ -298,7 +391,6 @@ export function Player({
       hasWeapon,
       isGrimoireOpen
     );
-    stepRef.current = step;
 
     // Sync shared player position ref for Enemies & World
     playerPosRef.current.copy(ctrl.position);
@@ -307,6 +399,27 @@ export function Player({
     if (groupRef.current) {
       groupRef.current.position.copy(ctrl.position);
       groupRef.current.rotation.y = ctrl.yaw;
+    }
+
+    // Update animation state machine (procedural Mixamo/RPM rig when native locomotion clips are absent)
+    if (useProceduralRef.current) {
+      proceduralAnimRef.current.update(dt, step, hasWeapon, clock.getElapsedTime());
+      if (modelRef.current && groupRef.current && step.grounded && step.state !== 'Death') {
+        modelRef.current.updateMatrixWorld(true);
+        const lowestFootY = proceduralAnimRef.current.getLowestFootLocalY(groupRef.current);
+        if (lowestFootY !== null) {
+          const desiredSoleClearance = 0.042;
+          modelRef.current.position.y += desiredSoleClearance - lowestFootY;
+        }
+      } else if (modelRef.current && !step.grounded) {
+        modelRef.current.position.y = THREE.MathUtils.lerp(
+          modelRef.current.position.y,
+          modelOffsetY,
+          1 - Math.exp(-12 * dt)
+        );
+      }
+    } else {
+      animControllerRef.current.update(step.state, step.horizSpeed, actions);
     }
 
     // Subtle posture layer for flight tilt, landing squash, hit stagger, & attack anticipation/recovery
@@ -429,16 +542,22 @@ export function Player({
     camera.lookAt(camTargetRef.current);
   });
 
+  const isSoldierModel = modelUrl.includes('Soldier.glb');
+
   return (
     <group ref={groupRef} position={[0, getGroundHeight(0, 0), 0]}>
       <group ref={tiltGroupRef}>
-        <HumanCharacter
-          stepRef={stepRef}
-          hasWeapon={hasWeapon}
-          isInvisible={isInvisible}
-          weaponElement={weaponElement}
-        />
+        <group
+          ref={modelRef}
+          position={[0, modelOffsetY, 0]}
+          rotation={[0, isSoldierModel ? Math.PI : 0, 0]}
+          scale={modelNormScale}
+        >
+          <primitive object={scene} />
+        </group>
       </group>
+
+      {rightHandBone && weaponElement && createPortal(weaponElement, rightHandBone)}
 
       {/* Melee Swing Trail */}
       <mesh
@@ -469,3 +588,5 @@ export function Player({
     </group>
   );
 }
+
+useGLTF.preload(DEFAULT_CHARACTER_MODEL_URL);

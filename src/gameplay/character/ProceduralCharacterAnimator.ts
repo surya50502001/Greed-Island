@@ -74,6 +74,8 @@ export class ProceduralCharacterAnimator {
     bindLocalQuat: THREE.Quaternion;
   }> = [];
   private hipsRestY = 0;
+  private hipsUnitScale = 1;
+  private armDownAngle = 0.36;
   private initialized = false;
   private walkPhase = 0;
 
@@ -152,8 +154,16 @@ export class ProceduralCharacterAnimator {
     const hipsEntry = this.bones.get('hips');
     if (hipsEntry) {
       this.hipsRestY = hipsEntry.bone.position.y;
+      this.hipsUnitScale = this.hipsRestY > 10 ? 1 : 0.01;
       hipsEntry.bone.position.x = 0;
       hipsEntry.bone.position.z = 0;
+    }
+
+    const leftArmEntry = this.bones.get('leftArm');
+    if (leftArmEntry) {
+      const dir = new THREE.Vector3(0, 1, 0).applyQuaternion(leftArmEntry.worldBindQuat);
+      const angleFromDown = Math.atan2(Math.max(0, dir.x), Math.max(0.01, -dir.y));
+      this.armDownAngle = Math.max(0.15, angleFromDown - 0.16);
     }
 
     this.resetToBindPose();
@@ -229,7 +239,7 @@ export class ProceduralCharacterAnimator {
     }
 
     // Base relaxed arm-down angles from A-pose (~35° down -> add ~48° to hang naturally)
-    const armDown = 0.78;
+    const armDown = this.armDownAngle;
     const breath = Math.sin(elapsedTime * 1.9);
     const subtleSway = Math.sin(elapsedTime * 0.95);
 
@@ -494,7 +504,7 @@ export class ProceduralCharacterAnimator {
       hipsEntry.bone.position.z = 0;
       hipsEntry.bone.position.y = THREE.MathUtils.lerp(
         hipsEntry.bone.position.y,
-        this.hipsRestY + hipsOffsetY,
+        this.hipsRestY + hipsOffsetY * this.hipsUnitScale,
         slerpAlpha
       );
     }
