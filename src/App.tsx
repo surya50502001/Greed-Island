@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Sky } from '@react-three/drei';
 import * as THREE from 'three';
@@ -99,14 +99,16 @@ export function App() {
           playerPosRef={playerPosRef}
           isInvisible={isInvisible}
         />
-        <Player
-          playerPosRef={playerPosRef}
-          enemiesRef={enemiesRef}
-          isFlying={isFlying}
-          hasWeapon={hasWeapon}
-          isInvisible={isInvisible}
-          onPointerLockChange={setPointerLocked}
-        />
+        <Suspense fallback={null}>
+          <Player
+            playerPosRef={playerPosRef}
+            enemiesRef={enemiesRef}
+            isFlying={isFlying}
+            hasWeapon={hasWeapon}
+            isInvisible={isInvisible}
+            onPointerLockChange={setPointerLocked}
+          />
+        </Suspense>
       </Canvas>
 
       <HUD

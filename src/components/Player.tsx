@@ -1,9 +1,12 @@
-import { useEffect, useRef } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal, useFrame, useThree } from '@react-three/fiber';
+import { useAnimations, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { ISLAND_RADIUS } from '../types/game';
 import { getTerrainHeight } from '../world/terrain';
 import { EnemyEntity } from './Enemies';
+
+const SOLDIER_URL = 'https://threejs.org/examples/models/gltf/Soldier.glb';
 
 interface PlayerProps {
   playerPosRef: React.MutableRefObject<THREE.Vector3>;
@@ -23,22 +26,27 @@ export function Player({
   onPointerLockChange,
 }: PlayerProps) {
   const { camera, gl } = useThree();
+  const { scene, animations } = useGLTF(SOLDIER_URL);
 
   const groupRef = useRef<THREE.Group>(null);
-  const bodyMeshRef = useRef<THREE.Group>(null);
-  const rightArmRef = useRef<THREE.Group>(null);
-  const leftArmRef = useRef<THREE.Group>(null);
-  const leftLegRef = useRef<THREE.Mesh>(null);
-  const rightLegRef = useRef<THREE.Mesh>(null);
+  const tiltGroupRef = useRef<THREE.Group>(null);
+  const modelRef = useRef<THREE.Group>(null);
   const slashTrailRef = useRef<THREE.Mesh>(null);
   const auraGroupRef = useRef<THREE.Group>(null);
+  const weaponGroupRef = useRef<THREE.Group>(null);
+
+  const { actions } = useAnimations(animations, modelRef);
+  const currentAnimRef = useRef<string>('');
+
+  const [rightHandBone, setRightHandBone] = useState<THREE.Object3D | null>(null);
+  const [handInvScale, setHandInvScale] = useState<number>(1);
 
   // Physics & input state in refs for 60fps zero-re-render loop
   const velocityRef = useRef(new THREE.Vector3());
   const groundedRef = useRef(true);
   const playerYawRef = useRef(0);
-  const camYawRef = useRef(Math.PI); // Start facing north (-Z) toward island center
-  const camPitchRef = useRef(0.28);
+  const camYawRef = useRef(Math.PI);
+  const camPitchRef = useRef(0.14);
   const isDraggingRef = useRef(false);
 
   const keysRef = useRef<Record<string, boolean>>({});
@@ -53,22 +61,53 @@ export function Player({
   const rightRef = useRef(new THREE.Vector3());
   const moveDirRef = useRef(new THREE.Vector3());
 
-  // Apply transparency to all player meshes when invisible
+  // Configure shadows and locate mixamorigRightHand bone once loaded
   useEffect(() => {
-    const group = bodyMeshRef.current;
-    if (!group) return;
-    group.traverse((obj) => {
+    scene.updateMatrixWorld(true);
+    scene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
-        const mesh = obj as THREE.Mesh;
-        const mat = mesh.material as THREE.MeshStandardMaterial;
-        if (!mat || !('opacity' in mat)) return;
-        mat.transparent = isInvisible;
-        mat.opacity = isInvisible ? 0.25 : 1.0;
-        mat.depthWrite = !isInvisible;
-        mat.needsUpdate = true;
+        obj.castShadow = true;
+        obj.receiveShadow = true;
       }
     });
-  }, [isInvisible]);
+
+    const hand = scene.getObjectByName('mixamorigRightHand');
+    if (hand) {
+      const worldScale = new THREE.Vector3();
+      hand.getWorldScale(worldScale);
+      setHandInvScale(1 / (worldScale.x || 1));
+      setRightHandBone(hand);
+    }
+  }, [scene]);
+
+  // Apply 0.25 opacity to Soldier meshes when [3] Invisibility is active
+  useEffect(() => {
+    scene.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        const mesh = obj as THREE.Mesh;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const mat of materials) {
+          if (!mat) continue;
+          mat.transparent = isInvisible;
+          mat.opacity = isInvisible ? 0.25 : 1.0;
+          mat.depthWrite = !isInvisible;
+          mat.needsUpdate = true;
+        }
+      }
+    });
+  }, [scene, isInvisible]);
+
+  // Start with Idle animation
+  useEffect(() => {
+    const idle = actions['Idle'];
+    if (idle) {
+      idle.reset().fadeIn(0.2).play();
+      currentAnimRef.current = 'Idle';
+    }
+    return () => {
+      Object.values(actions).forEach((action) => action?.stop());
+    };
+  }, [actions]);
 
   // Keyboard & mouse controls
   useEffect(() => {
@@ -86,8 +125,8 @@ export function Player({
       if (locked || isDraggingRef.current) {
         camYawRef.current -= e.movementX * 0.0032;
         camPitchRef.current = Math.max(
-          -0.65,
-          Math.min(1.05, camPitchRef.current + e.movementY * 0.0028)
+          -0.55,
+          Math.min(0.95, camPitchRef.current + e.movementY * 0.0028)
         );
       }
     };
@@ -98,7 +137,6 @@ export function Player({
           dom.requestPointerLock?.();
           isDraggingRef.current = true;
         }
-        // Trigger melee attack if weapon is summoned
         if (hasWeapon && attackCooldownRef.current <= 0) {
           attackTimerRef.current = 0.28;
           attackCooldownRef.current = 0.36;
@@ -134,6 +172,39 @@ export function Player({
     };
   }, [gl, hasWeapon, onPointerLockChange]);
 
+  const weaponElement = useMemo(() => {
+    if (!hasWeapon) return null;
+    return (
+      <group
+        ref={weaponGroupRef}
+        scale={handInvScale}
+        position={[0, 0.08 * handInvScale, 0.04 * handInvScale]}
+        rotation={[Math.PI / 2, 0, 0]}
+      >
+        {/* Hilt */}
+        <mesh>
+          <cylinderGeometry args={[0.035, 0.035, 0.28, 8]} />
+          <meshStandardMaterial color="#1f2937" metalness={0.5} roughness={0.4} />
+        </mesh>
+        {/* Crossguard */}
+        <mesh position={[0, 0.14, 0]}>
+          <boxGeometry args={[0.28, 0.06, 0.09]} />
+          <meshStandardMaterial color="#fbbf24" metalness={0.7} roughness={0.25} />
+        </mesh>
+        {/* Glowing Energy Blade */}
+        <mesh position={[0, 0.78, 0]}>
+          <boxGeometry args={[0.085, 1.24, 0.03]} />
+          <meshStandardMaterial
+            color="#67e8f9"
+            emissive="#06b6d4"
+            emissiveIntensity={2.2}
+            roughness={0.1}
+          />
+        </mesh>
+      </group>
+    );
+  }, [hasWeapon, handInvScale]);
+
   useFrame(({ clock }, delta) => {
     const dt = Math.min(delta, 0.05);
     const keys = keysRef.current;
@@ -151,12 +222,10 @@ export function Player({
     const forwardInput = w - s;
     const strafeInput = d - a;
 
-    // Camera horizontal basis
     const yaw = camYawRef.current;
     const pitch = camPitchRef.current;
 
     if (isFlying) {
-      // 3D camera-directed flight
       const cosPitch = Math.cos(pitch);
       forwardRef.current
         .set(-Math.sin(yaw) * cosPitch, -Math.sin(pitch), -Math.cos(yaw) * cosPitch)
@@ -177,7 +246,6 @@ export function Player({
       vel.lerp(moveDirRef.current.multiplyScalar(flySpeed), 1 - Math.exp(-8 * dt));
       pos.addScaledVector(vel, dt);
 
-      // Keep above terrain & below sky ceiling
       const floorY = getTerrainHeight(pos.x, pos.z) + 0.4;
       if (pos.y < floorY) {
         pos.y = floorY;
@@ -186,7 +254,6 @@ export function Player({
       if (pos.y > 95) pos.y = 95;
       groundedRef.current = false;
     } else {
-      // Ground movement
       forwardRef.current.set(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
       rightRef.current.set(Math.cos(yaw), 0, -Math.sin(yaw)).normalize();
 
@@ -243,23 +310,47 @@ export function Player({
       playerYawRef.current += diff * Math.min(1, 12 * dt);
     }
 
-    // Update character transform
+    // Update character root transform
     if (groupRef.current) {
       groupRef.current.position.copy(pos);
       groupRef.current.rotation.y = playerYawRef.current;
     }
 
-    // Limb & flight animations
-    const t = clock.getElapsedTime();
-    const walkCycle = horizSpeed > 0.5 && groundedRef.current && !isFlying ? t * (shift ? 13 : 9) : 0;
-    const swing = Math.sin(walkCycle) * 0.65;
-
-    if (leftLegRef.current && rightLegRef.current) {
-      leftLegRef.current.rotation.x = isFlying ? 0.25 : swing;
-      rightLegRef.current.rotation.x = isFlying ? 0.35 : -swing;
+    // Blend Soldier animations (Idle / Walk / Run)
+    let desiredAnim = 'Idle';
+    if (isFlying) {
+      desiredAnim = horizSpeed > 2 ? 'Run' : 'Idle';
+    } else if (horizSpeed > 0.6) {
+      desiredAnim = shift && horizSpeed > 8.5 ? 'Run' : 'Walk';
     }
-    if (leftArmRef.current) {
-      leftArmRef.current.rotation.x = isFlying ? -0.5 : -swing * 0.8;
+
+    if (desiredAnim !== currentAnimRef.current && actions[desiredAnim]) {
+      const prev = actions[currentAnimRef.current];
+      const next = actions[desiredAnim]!;
+      prev?.fadeOut(0.18);
+      next.reset().fadeIn(0.18).play();
+      currentAnimRef.current = desiredAnim;
+    }
+
+    // Forward flight tilt posture
+    if (tiltGroupRef.current) {
+      const targetTilt = isFlying ? (horizSpeed > 2 ? 0.72 : 0.38) : 0;
+      tiltGroupRef.current.rotation.x = THREE.MathUtils.lerp(
+        tiltGroupRef.current.rotation.x,
+        targetTilt,
+        1 - Math.exp(-8 * dt)
+      );
+      // Subtle body twist during sword swing
+      if (attackTimerRef.current > 0) {
+        const progress = 1 - attackTimerRef.current / 0.28;
+        tiltGroupRef.current.rotation.y = -0.6 + progress * 1.2;
+      } else {
+        tiltGroupRef.current.rotation.y = THREE.MathUtils.lerp(
+          tiltGroupRef.current.rotation.y,
+          0,
+          1 - Math.exp(-14 * dt)
+        );
+      }
     }
 
     // Weapon slash & hit detection
@@ -270,16 +361,14 @@ export function Player({
       attackTimerRef.current = Math.max(0, attackTimerRef.current - dt);
       const progress = 1 - attackTimerRef.current / 0.28;
 
-      if (rightArmRef.current) {
-        rightArmRef.current.rotation.x = -1.6 + progress * 2.5;
-        rightArmRef.current.rotation.y = -0.8 + progress * 1.6;
+      if (weaponGroupRef.current) {
+        weaponGroupRef.current.rotation.x = Math.PI / 2 - 0.9 + progress * 1.9;
       }
       if (slashTrailRef.current) {
         slashTrailRef.current.visible = true;
         slashTrailRef.current.rotation.z = -1.1 + progress * 2.2;
       }
 
-      // Hit check mid-swing
       if (!attackHitDoneRef.current && progress >= 0.25) {
         attackHitDoneRef.current = true;
         const pFwdX = Math.sin(playerYawRef.current);
@@ -303,9 +392,8 @@ export function Player({
         }
       }
     } else {
-      if (rightArmRef.current) {
-        rightArmRef.current.rotation.x = hasWeapon ? -0.35 : isFlying ? -0.5 : swing * 0.8;
-        rightArmRef.current.rotation.y = 0;
+      if (weaponGroupRef.current) {
+        weaponGroupRef.current.rotation.x = Math.PI / 2;
       }
       if (slashTrailRef.current) {
         slashTrailRef.current.visible = false;
@@ -313,6 +401,7 @@ export function Player({
     }
 
     // Flight aura animation
+    const t = clock.getElapsedTime();
     if (auraGroupRef.current) {
       auraGroupRef.current.visible = isFlying;
       if (isFlying) {
@@ -321,110 +410,41 @@ export function Player({
       }
     }
 
-    // Third-person camera orbit follow
-    const camDist = isFlying && shift ? 9.5 : 8.0;
-    const lookAtY = pos.y + 1.55;
-    camTargetRef.current.set(pos.x, lookAtY, pos.z);
+    // Over-the-shoulder third-person follow camera
+    const camDist = isFlying && shift ? 4.6 : 3.7;
+    const rightX = Math.cos(yaw);
+    const rightZ = -Math.sin(yaw);
+    const shoulderOffset = 0.58;
+
+    const lookAtY = pos.y + 1.45;
+    camTargetRef.current.set(
+      pos.x + rightX * (shoulderOffset * 0.65),
+      lookAtY,
+      pos.z + rightZ * (shoulderOffset * 0.65)
+    );
 
     const horizDist = camDist * Math.cos(pitch);
-    const camX = pos.x + Math.sin(yaw) * horizDist;
-    const camZ = pos.z + Math.cos(yaw) * horizDist;
+    const camX = pos.x + Math.sin(yaw) * horizDist + rightX * shoulderOffset;
+    const camZ = pos.z + Math.cos(yaw) * horizDist + rightZ * shoulderOffset;
     let camY = lookAtY + camDist * Math.sin(pitch);
 
-    const terrainUnderCam = getTerrainHeight(camX, camZ) + 0.8;
+    const terrainUnderCam = getTerrainHeight(camX, camZ) + 0.6;
     if (camY < terrainUnderCam) camY = terrainUnderCam;
 
     camPosRef.current.set(camX, camY, camZ);
-    camera.position.lerp(camPosRef.current, 1 - Math.exp(-16 * dt));
+    camera.position.lerp(camPosRef.current, 1 - Math.exp(-18 * dt));
     camera.lookAt(camTargetRef.current);
   });
 
   return (
     <group ref={groupRef} position={[0, getTerrainHeight(0, 0), 0]}>
-      <group ref={bodyMeshRef}>
-        {/* Torso */}
-        <mesh castShadow position={[0, 1.15, 0]}>
-          <boxGeometry args={[0.68, 0.82, 0.42]} />
-          <meshStandardMaterial color="#2b59c3" roughness={0.6} />
-        </mesh>
-
-        {/* Cape / Scarf */}
-        <mesh castShadow position={[0, 1.12, -0.26]} rotation={[0.14, 0, 0]}>
-          <boxGeometry args={[0.58, 0.78, 0.08]} />
-          <meshStandardMaterial color="#e04f5f" roughness={0.7} />
-        </mesh>
-
-        {/* Head */}
-        <mesh castShadow position={[0, 1.85, 0]}>
-          <boxGeometry args={[0.52, 0.52, 0.52]} />
-          <meshStandardMaterial color="#f2cfb6" roughness={0.65} />
-        </mesh>
-        {/* Hair / Hood */}
-        <mesh castShadow position={[0, 2.02, -0.04]}>
-          <boxGeometry args={[0.56, 0.28, 0.56]} />
-          <meshStandardMaterial color="#1e293b" roughness={0.8} />
-        </mesh>
-        {/* Visor / Eyes */}
-        <mesh position={[0, 1.86, 0.26]}>
-          <boxGeometry args={[0.36, 0.1, 0.04]} />
-          <meshStandardMaterial
-            color={isInvisible ? '#a5f3fc' : '#38bdf8'}
-            emissive="#38bdf8"
-            emissiveIntensity={0.8}
-          />
-        </mesh>
-
-        {/* Left Arm */}
-        <group ref={leftArmRef} position={[-0.48, 1.45, 0]}>
-          <mesh castShadow position={[0, -0.32, 0]}>
-            <boxGeometry args={[0.22, 0.68, 0.22]} />
-            <meshStandardMaterial color="#254ca6" roughness={0.65} />
-          </mesh>
+      <group ref={tiltGroupRef}>
+        <group ref={modelRef} rotation={[0, Math.PI, 0]} scale={1.05}>
+          <primitive object={scene} />
         </group>
-
-        {/* Right Arm + Summoned Sword */}
-        <group ref={rightArmRef} position={[0.48, 1.45, 0]}>
-          <mesh castShadow position={[0, -0.32, 0]}>
-            <boxGeometry args={[0.22, 0.68, 0.22]} />
-            <meshStandardMaterial color="#254ca6" roughness={0.65} />
-          </mesh>
-
-          {hasWeapon && (
-            <group position={[0, -0.62, 0.28]} rotation={[Math.PI / 2.3, 0, 0]}>
-              {/* Hilt */}
-              <mesh>
-                <cylinderGeometry args={[0.045, 0.045, 0.32, 8]} />
-                <meshStandardMaterial color="#1f2937" metalness={0.5} roughness={0.4} />
-              </mesh>
-              {/* Crossguard */}
-              <mesh position={[0, 0.16, 0]}>
-                <boxGeometry args={[0.32, 0.07, 0.1]} />
-                <meshStandardMaterial color="#fbbf24" metalness={0.7} roughness={0.25} />
-              </mesh>
-              {/* Glowing Energy Blade */}
-              <mesh position={[0, 0.85, 0]}>
-                <boxGeometry args={[0.1, 1.32, 0.035]} />
-                <meshStandardMaterial
-                  color="#67e8f9"
-                  emissive="#06b6d4"
-                  emissiveIntensity={2.0}
-                  roughness={0.1}
-                />
-              </mesh>
-            </group>
-          )}
-        </group>
-
-        {/* Legs */}
-        <mesh ref={leftLegRef} castShadow position={[-0.18, 0.4, 0]}>
-          <boxGeometry args={[0.24, 0.72, 0.26]} />
-          <meshStandardMaterial color="#1e293b" roughness={0.8} />
-        </mesh>
-        <mesh ref={rightLegRef} castShadow position={[0.18, 0.4, 0]}>
-          <boxGeometry args={[0.24, 0.72, 0.26]} />
-          <meshStandardMaterial color="#1e293b" roughness={0.8} />
-        </mesh>
       </group>
+
+      {rightHandBone && weaponElement && createPortal(weaponElement, rightHandBone)}
 
       {/* Melee Swing Trail */}
       <mesh
@@ -433,12 +453,12 @@ export function Player({
         position={[0, 1.25, 0.55]}
         rotation={[Math.PI / 2, 0, 0]}
       >
-        <ringGeometry args={[1.15, 2.25, 24, 1, -Math.PI * 0.45, Math.PI * 0.9]} />
+        <ringGeometry args={[1.1, 2.2, 24, 1, -Math.PI * 0.45, Math.PI * 0.9]} />
         <meshBasicMaterial color="#67e8f9" transparent opacity={0.78} side={THREE.DoubleSide} />
       </mesh>
 
       {/* Flight Wind / Aura Effect */}
-      <group ref={auraGroupRef} visible={false} position={[0, 1.1, 0]}>
+      <group ref={auraGroupRef} visible={false} position={[0, 1.05, 0]}>
         <mesh rotation={[Math.PI / 2, 0, 0]}>
           <torusGeometry args={[1.15, 0.04, 8, 32]} />
           <meshBasicMaterial color="#38bdf8" transparent opacity={0.75} />
@@ -455,3 +475,5 @@ export function Player({
     </group>
   );
 }
+
+useGLTF.preload(SOLDIER_URL);
