@@ -164,6 +164,33 @@ export class CharacterController {
     this.isDead = false;
   }
 
+  public reviveAt(x = 0, z = 0): void {
+    this.isDead = false;
+    this.position.set(x, getTerrainHeight(x, z), z);
+    this.velocity.set(0, 0, 0);
+    this.yaw = 0;
+    this.grounded = true;
+    this.prevIsFlying = false;
+    this.pendingFlightLand = false;
+    this.pendingJump = false;
+    this.jumpAnticipationTimer = 0;
+    this.jumpStartHoldTimer = 0;
+    this.landRecoveryTimer = 0;
+    this.flightTakeoffTimer = 0;
+    this.flightLandTimer = 0;
+    this.attackTimer = 0;
+    this.attackCooldown = 0;
+    this.dodgeTimer = 0;
+    this.dodgeCooldown = 0;
+    this.hitReactionTimer = 0;
+    this.clearInputs();
+  }
+
+  public getIsBlocking(): boolean {
+    if (this.isDead) return false;
+    return Boolean(this.readInputs(false).block && this.grounded && !this.prevIsFlying);
+  }
+
   public completeOneShotState(state: CharacterLocomotionState): void {
     switch (state) {
       case 'JumpStart':

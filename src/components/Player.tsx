@@ -10,12 +10,20 @@ import {
   DEFAULT_CHARACTER_MODEL_URL,
   getMissingStatesForClips,
 } from '../gameplay/character/CharacterStates';
+import { PLAYER_ATTACK_DAMAGE } from '../gameplay/combat/HealthSystem';
 
 export interface PlayerTouchBridge {
   setMove: (x: number, y: number) => void;
   setAction: (action: 'sprint' | 'jump' | 'descend' | 'block', pressed: boolean) => void;
   triggerAttack: () => void;
   triggerDodge: () => void;
+}
+
+export interface PlayerCombatBridge {
+  triggerHitReaction: () => void;
+  triggerDeath: () => void;
+  reviveAtStartingPlaza: () => void;
+  isBlocking: () => boolean;
 }
 
 interface PlayerProps {
@@ -26,7 +34,8 @@ interface PlayerProps {
   hasWeapon: boolean;
   isInvisible: boolean;
   isGrimoireOpen: boolean;
-  hitTriggerRef?: React.MutableRefObject<(() => void) | null>;
+  isDead: boolean;
+  combatBridgeRef?: React.MutableRefObject<PlayerCombatBridge | null>;
   touchBridgeRef?: React.MutableRefObject<PlayerTouchBridge | null>;
   onPointerLockChange: (locked: boolean) => void;
 }
@@ -39,7 +48,8 @@ export function Player({
   hasWeapon,
   isInvisible,
   isGrimoireOpen,
-  hitTriggerRef,
+  isDead,
+  combatBridgeRef,
   touchBridgeRef,
   onPointerLockChange,
 }: PlayerProps) {
@@ -74,11 +84,20 @@ export function Player({
   const camTargetRef = useRef(new THREE.Vector3());
   const camPosRef = useRef(new THREE.Vector3());
 
-  // Expose hit reaction & touch bridge to parent
+  // Expose combat & touch bridges to parent
   useEffect(() => {
-    if (hitTriggerRef) {
-      hitTriggerRef.current = () => {
-        controllerRef.current.triggerHitReaction(hasWeapon, isGrimoireOpen);
+    if (combatBridgeRef) {
+      combatBridgeRef.current = {
+        triggerHitReaction: () => {
+          controllerRef.current.triggerHitReaction(hasWeapon, isGrimoireOpen);
+        },
+        triggerDeath: () => {
+          controllerRef.current.triggerDeath();
+        },
+        reviveAtStartingPlaza: () => {
+          controllerRef.current.reviveAt(0, 0);
+        },
+        isBlocking: () => hasWeapon && controllerRef.current.getIsBlocking(),
       };
     }
     if (touchBridgeRef) {
@@ -96,10 +115,10 @@ export function Player({
       };
     }
     return () => {
-      if (hitTriggerRef) hitTriggerRef.current = null;
+      if (combatBridgeRef) combatBridgeRef.current = null;
       if (touchBridgeRef) touchBridgeRef.current = null;
     };
-  }, [hitTriggerRef, touchBridgeRef, hasWeapon, isFlying, isGrimoireOpen]);
+  }, [combatBridgeRef, touchBridgeRef, hasWeapon, isFlying, isGrimoireOpen]);
 
   // Configure shadows, normalize height to ~1.85m, log clips, and locate RightHand bone
   useEffect(() => {
@@ -167,16 +186,16 @@ export function Player({
     };
   }, [actions, mixer]);
 
-  // Clear held inputs and release pointer lock when Grimoire opens
+  // Clear held inputs and release pointer lock when Grimoire opens or player dies
   useEffect(() => {
-    if (isGrimoireOpen) {
+    if (isGrimoireOpen || isDead) {
       controllerRef.current.clearInputs();
       isDraggingRef.current = false;
       if (document.pointerLockElement === gl.domElement) {
         document.exitPointerLock?.();
       }
     }
-  }, [isGrimoireOpen, gl]);
+  }, [isGrimoireOpen, isDead, gl]);
 
   // Keyboard, mouse, and window focus listeners
   useEffect(() => {
@@ -424,10 +443,16 @@ export function Player({
             const dot = (dx * pFwdX + dz * pFwdZ) / (dist || 1);
             if (dist < 2.2 || dot > 0.15) {
               hitEnemiesThisAttackRef.current.add(enemy.id);
-              enemy.hitFlash = 0.18;
-              enemy.alive = false;
-              enemy.chasing = false;
-              enemy.respawnTimer = 14;
+              enemy.hitFlash = 0.22;
+              enemy.hp = Math.max(0, enemy.hp - PLAYER_ATTACK_DAMAGE);
+              const invD = 1 / (dist || 1);
+              enemy.knockbackX = dx * invD * 14;
+              enemy.knockbackZ = dz * invD * 14;
+              if (enemy.hp <= 0) {
+                enemy.alive = false;
+                enemy.chasing = false;
+                enemy.respawnTimer = 14;
+              }
             }
           }
         }

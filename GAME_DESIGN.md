@@ -10,7 +10,8 @@ A stylized 3D open-world browser game built with **Vite + React + TypeScript** a
   2. **Ancient Ruins** `(-54, -46)` — Broken stone archway, columns, amber relic altar.
   3. **Crystal Peak** `(58, -50)` — High mountain peak with glowing crystals and orbiting shards.
   4. **Forest Shrine** `(0, 64)` — Torii gate, spirit lanterns, sacred ancient tree, orbiting wisps.
-- **Patrolling Enemies** (`src/components/Enemies.tsx`): 8 stalker golems that patrol around landmarks, chase the player within aggro range (`17` units) unless invisible, and respawn `14s` after being defeated.
+- **Patrolling Enemies** (`src/components/Enemies.tsx`): 8 stalker golems (`60 HP` each) that patrol around landmarks, chase the player within aggro range (`17` units) unless invisible or dead, deal `15` damage (`0.85s` player damage cooldown), take `25` damage with knockback & overhead HP bars, and respawn `14s` after being defeated.
+- **Player Health & Revival** (`src/gameplay/combat/HealthSystem.ts`): Player starts with `100 HP`. Blocking (`F`) negates incoming damage; reaching `0 HP` triggers `Death`, disables actions/Grimoire, and opens the **Revive at Starting Plaza (`[R]`)** overlay.
 
 ## Controls
 - **Ground Movement**: `WASD` move relative to camera, `Shift` sprint, `Space` jump, `Left-Click` attack (with Weapon summoned).

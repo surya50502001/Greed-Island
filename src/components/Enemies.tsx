@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { getTerrainHeight } from '../world/terrain';
+import { ENEMY_ATTACK_DAMAGE, ENEMY_MAX_HP } from '../gameplay/combat/HealthSystem';
 
 export interface EnemyEntity {
   id: string;
@@ -9,12 +10,16 @@ export interface EnemyEntity {
   position: THREE.Vector3;
   patrolTarget: THREE.Vector3;
   patrolRadius: number;
+  hp: number;
+  maxHp: number;
   alive: boolean;
   respawnTimer: number;
   chasing: boolean;
   hitFlash: number;
   yaw: number;
   attackCooldown: number;
+  knockbackX: number;
+  knockbackZ: number;
 }
 
 export function createInitialEnemies(): EnemyEntity[] {
@@ -38,12 +43,16 @@ export function createInitialEnemies(): EnemyEntity[] {
       position: home.clone(),
       patrolTarget: new THREE.Vector3(x + radius * 0.6, y, z + radius * 0.4),
       patrolRadius: radius,
+      hp: ENEMY_MAX_HP,
+      maxHp: ENEMY_MAX_HP,
       alive: true,
       respawnTimer: 0,
       chasing: false,
       hitFlash: 0,
       yaw: 0,
       attackCooldown: 0,
+      knockbackX: 0,
+      knockbackZ: 0,
     };
   });
 }
@@ -52,20 +61,19 @@ interface EnemiesProps {
   enemiesRef: React.MutableRefObject<EnemyEntity[]>;
   playerPosRef: React.MutableRefObject<THREE.Vector3>;
   isInvisible: boolean;
-  onPlayerHit?: () => void;
+  isPlayerDead: boolean;
+  onPlayerHit?: (damage: number, enemyId: string) => void;
 }
 
-function EnemyMesh({
-  enemy,
-}: {
-  enemy: EnemyEntity;
-}) {
+function EnemyMesh({ enemy }: { enemy: EnemyEntity }) {
   const groupRef = useRef<THREE.Group>(null);
   const bodyMatRef = useRef<THREE.MeshStandardMaterial>(null);
   const eyeMatRef = useRef<THREE.MeshStandardMaterial>(null);
   const coreRef = useRef<THREE.Mesh>(null);
+  const hpBarGroupRef = useRef<THREE.Group>(null);
+  const hpFillRef = useRef<THREE.Mesh>(null);
 
-  useFrame(({ clock }, delta) => {
+  useFrame(({ clock, camera }, delta) => {
     const g = groupRef.current;
     if (!g) return;
 
@@ -83,8 +91,8 @@ function EnemyMesh({
     if (bodyMatRef.current) {
       if (enemy.hitFlash > 0) {
         bodyMatRef.current.color.set('#ffffff');
-        bodyMatRef.current.emissive.set('#ffffff');
-        bodyMatRef.current.emissiveIntensity = 1.2;
+        bodyMatRef.current.emissive.set('#ff4d4d');
+        bodyMatRef.current.emissiveIntensity = 1.4;
       } else {
         bodyMatRef.current.color.set(enemy.chasing ? '#4c1d3d' : '#2d2942');
         bodyMatRef.current.emissive.set(enemy.chasing ? '#7f1d1d' : '#1e1b2e');
@@ -96,6 +104,18 @@ function EnemyMesh({
       eyeMatRef.current.color.set(enemy.chasing ? '#ff3b3b' : '#f59e0b');
       eyeMatRef.current.emissive.set(enemy.chasing ? '#ff1e1e' : '#d97706');
       eyeMatRef.current.emissiveIntensity = enemy.chasing ? 2.4 : 1.4;
+    }
+
+    // Overhead HP bar when damaged
+    if (hpBarGroupRef.current && hpFillRef.current) {
+      const showHp = enemy.hp < enemy.maxHp;
+      hpBarGroupRef.current.visible = showHp;
+      if (showHp) {
+        hpBarGroupRef.current.lookAt(camera.position);
+        const pct = Math.max(0.01, enemy.hp / enemy.maxHp);
+        hpFillRef.current.scale.x = pct;
+        hpFillRef.current.position.x = -(1 - pct) * 0.6;
+      }
     }
   });
 
@@ -125,11 +145,29 @@ function EnemyMesh({
           emissiveIntensity={1.4}
         />
       </mesh>
+
+      {/* Overhead Health Bar */}
+      <group ref={hpBarGroupRef} position={[0, 1.35, 0]} visible={false}>
+        <mesh>
+          <planeGeometry args={[1.26, 0.16]} />
+          <meshBasicMaterial color="#0f172a" transparent opacity={0.85} side={THREE.DoubleSide} />
+        </mesh>
+        <mesh ref={hpFillRef} position={[0, 0, 0.01]}>
+          <planeGeometry args={[1.2, 0.1]} />
+          <meshBasicMaterial color="#ef4444" side={THREE.DoubleSide} />
+        </mesh>
+      </group>
     </group>
   );
 }
 
-export function Enemies({ enemiesRef, playerPosRef, isInvisible, onPlayerHit }: EnemiesProps) {
+export function Enemies({
+  enemiesRef,
+  playerPosRef,
+  isInvisible,
+  isPlayerDead,
+  onPlayerHit,
+}: EnemiesProps) {
   const tempVec = useRef(new THREE.Vector3());
 
   useFrame((_, delta) => {
@@ -141,8 +179,11 @@ export function Enemies({ enemiesRef, playerPosRef, isInvisible, onPlayerHit }: 
         enemy.respawnTimer -= dt;
         if (enemy.respawnTimer <= 0) {
           enemy.alive = true;
+          enemy.hp = enemy.maxHp;
           enemy.chasing = false;
           enemy.hitFlash = 0;
+          enemy.knockbackX = 0;
+          enemy.knockbackZ = 0;
           enemy.position.copy(enemy.home);
         }
         continue;
@@ -152,15 +193,23 @@ export function Enemies({ enemiesRef, playerPosRef, isInvisible, onPlayerHit }: 
         enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
       }
 
+      // Apply & decay knockback impulse
+      if (Math.abs(enemy.knockbackX) > 0.05 || Math.abs(enemy.knockbackZ) > 0.05) {
+        enemy.position.x += enemy.knockbackX * dt;
+        enemy.position.z += enemy.knockbackZ * dt;
+        const decay = Math.exp(-10 * dt);
+        enemy.knockbackX *= decay;
+        enemy.knockbackZ *= decay;
+      }
+
       const distToPlayer = Math.hypot(
         playerPos.x - enemy.position.x,
         playerPos.z - enemy.position.z
       );
       const verticalDiff = Math.abs(playerPos.y - enemy.position.y);
 
-      // Chase if within range, not too high in the air, and player is NOT invisible
       const aggroRange = 17;
-      if (!isInvisible && distToPlayer < aggroRange && verticalDiff < 8.5) {
+      if (!isPlayerDead && !isInvisible && distToPlayer < aggroRange && verticalDiff < 8.5) {
         enemy.chasing = true;
       } else {
         enemy.chasing = false;
@@ -181,13 +230,12 @@ export function Enemies({ enemiesRef, playerPosRef, isInvisible, onPlayerHit }: 
           enemy.position.x += tempVec.current.x * speed * dt;
           enemy.position.z += tempVec.current.z * speed * dt;
           enemy.yaw = Math.atan2(tempVec.current.x, tempVec.current.z);
-        } else if (enemy.attackCooldown <= 0) {
+        } else if (enemy.attackCooldown <= 0 && !isPlayerDead) {
           enemy.attackCooldown = 1.4;
-          onPlayerHit?.();
+          onPlayerHit?.(ENEMY_ATTACK_DAMAGE, enemy.id);
         }
       } else {
         if (distToTarget < 1.2) {
-          // Pick a new patrol target around home
           const angle = Math.random() * Math.PI * 2;
           const r = 4 + Math.random() * enemy.patrolRadius;
           const nx = enemy.home.x + Math.cos(angle) * r;

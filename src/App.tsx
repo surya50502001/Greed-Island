@@ -2,16 +2,21 @@ import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Sky } from '@react-three/drei';
 import * as THREE from 'three';
-import { CardId, INVISIBILITY_DURATION } from './types/game';
+import { CardId, INVISIBILITY_DURATION, PLAYER_MAX_HP } from './types/game';
 import { getTerrainHeight } from './world/terrain';
 import { World } from './components/World';
 import { createInitialEnemies, Enemies, EnemyEntity } from './components/Enemies';
-import { Player, PlayerTouchBridge } from './components/Player';
+import { Player, PlayerCombatBridge, PlayerTouchBridge } from './components/Player';
 import { Grimoire } from './components/Grimoire';
 import { HUD } from './components/HUD';
 import { MobileControls } from './components/MobileControls';
+import {
+  applyPlayerDamage,
+  PLAYER_DAMAGE_COOLDOWN,
+} from './gameplay/combat/HealthSystem';
 
 export function App() {
+  const [playerHp, setPlayerHp] = useState(PLAYER_MAX_HP);
   const [isFlying, setIsFlying] = useState(false);
   const [hasWeapon, setHasWeapon] = useState(false);
   const [invisTimer, setInvisTimer] = useState(0);
@@ -22,8 +27,11 @@ export function App() {
     new THREE.Vector3(0, getTerrainHeight(0, 0), 0)
   );
   const enemiesRef = useRef<EnemyEntity[]>(createInitialEnemies());
-  const hitTriggerRef = useRef<(() => void) | null>(null);
+  const combatBridgeRef = useRef<PlayerCombatBridge | null>(null);
   const touchBridgeRef = useRef<PlayerTouchBridge | null>(null);
+  const lastDamageTimeRef = useRef<number>(0);
+
+  const isDead = playerHp <= 0;
 
   const handleActivateCard = useCallback((id: CardId) => {
     if (id === 'flight') {
@@ -35,10 +43,50 @@ export function App() {
     }
   }, []);
 
-  // Grimoire summon / dismiss keybindings (G to toggle, Escape to close)
+  const handlePlayerHit = useCallback(
+    (damage: number, sourceId: string) => {
+      if (playerHp <= 0) return;
+      const now = performance.now();
+      if (now - lastDamageTimeRef.current < PLAYER_DAMAGE_COOLDOWN * 1000) {
+        return;
+      }
+
+      const isBlocking = combatBridgeRef.current?.isBlocking() ?? false;
+      const result = applyPlayerDamage(playerHp, { amount: damage, sourceId }, isBlocking);
+      if (result.wasBlocked) return;
+
+      lastDamageTimeRef.current = now;
+      setPlayerHp(result.nextHp);
+
+      if (result.isFatal) {
+        setIsGrimoireOpen(false);
+        setIsFlying(false);
+        combatBridgeRef.current?.triggerDeath();
+      } else {
+        combatBridgeRef.current?.triggerHitReaction();
+      }
+    },
+    [playerHp]
+  );
+
+  const handleRevive = useCallback(() => {
+    setPlayerHp(PLAYER_MAX_HP);
+    setIsFlying(false);
+    setIsGrimoireOpen(false);
+    lastDamageTimeRef.current = 0;
+    combatBridgeRef.current?.reviveAtStartingPlaza();
+  }, []);
+
+  // Grimoire summon/dismiss & Revival keybindings
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
+      if (isDead) {
+        if (e.code === 'KeyR') {
+          handleRevive();
+        }
+        return;
+      }
       if (e.code === 'KeyG') {
         setIsGrimoireOpen((prev) => !prev);
       } else if (e.code === 'Escape') {
@@ -47,7 +95,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [isDead, handleRevive]);
 
   // Invisibility countdown timer
   useEffect(() => {
@@ -99,7 +147,8 @@ export function App() {
           enemiesRef={enemiesRef}
           playerPosRef={playerPosRef}
           isInvisible={isInvisible}
-          onPlayerHit={() => hitTriggerRef.current?.()}
+          isPlayerDead={isDead}
+          onPlayerHit={handlePlayerHit}
         />
         <Suspense fallback={null}>
           <Player
@@ -109,13 +158,14 @@ export function App() {
             hasWeapon={hasWeapon}
             isInvisible={isInvisible}
             isGrimoireOpen={isGrimoireOpen}
-            hitTriggerRef={hitTriggerRef}
+            isDead={isDead}
+            combatBridgeRef={combatBridgeRef}
             touchBridgeRef={touchBridgeRef}
             onPointerLockChange={setPointerLocked}
           />
         </Suspense>
         <Grimoire
-          isOpen={isGrimoireOpen}
+          isOpen={isGrimoireOpen && !isDead}
           isFlying={isFlying}
           hasWeapon={hasWeapon}
           isInvisible={isInvisible}
@@ -125,17 +175,23 @@ export function App() {
       </Canvas>
 
       <HUD
+        hp={playerHp}
+        maxHp={PLAYER_MAX_HP}
+        isDead={isDead}
         isFlying={isFlying}
         hasWeapon={hasWeapon}
         invisTimer={invisTimer}
         isGrimoireOpen={isGrimoireOpen}
+        onRevive={handleRevive}
       />
       <MobileControls
         touchBridgeRef={touchBridgeRef}
         isFlying={isFlying}
         hasWeapon={hasWeapon}
-        isGrimoireOpen={isGrimoireOpen}
-        onToggleGrimoire={() => setIsGrimoireOpen((prev) => !prev)}
+        isGrimoireOpen={isGrimoireOpen || isDead}
+        onToggleGrimoire={() => {
+          if (!isDead) setIsGrimoireOpen((prev) => !prev);
+        }}
       />
     </div>
   );
