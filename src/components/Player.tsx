@@ -14,6 +14,7 @@ interface PlayerProps {
   isFlying: boolean;
   hasWeapon: boolean;
   isInvisible: boolean;
+  isGrimoireOpen: boolean;
   onPointerLockChange: (locked: boolean) => void;
 }
 
@@ -23,6 +24,7 @@ export function Player({
   isFlying,
   hasWeapon,
   isInvisible,
+  isGrimoireOpen,
   onPointerLockChange,
 }: PlayerProps) {
   const { camera, gl } = useThree();
@@ -109,6 +111,16 @@ export function Player({
     };
   }, [actions]);
 
+  // Release pointer lock when Grimoire opens so mouse can interact with 3D cards
+  useEffect(() => {
+    if (isGrimoireOpen) {
+      isDraggingRef.current = false;
+      if (document.pointerLockElement === gl.domElement) {
+        document.exitPointerLock?.();
+      }
+    }
+  }, [isGrimoireOpen, gl]);
+
   // Keyboard & mouse controls
   useEffect(() => {
     const dom = gl.domElement;
@@ -121,6 +133,7 @@ export function Player({
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (isGrimoireOpen) return;
       const locked = document.pointerLockElement === dom;
       if (locked || isDraggingRef.current) {
         camYawRef.current -= e.movementX * 0.0032;
@@ -132,6 +145,7 @@ export function Player({
     };
 
     const handleMouseDown = (e: MouseEvent) => {
+      if (isGrimoireOpen) return;
       if (e.button === 0) {
         if (document.pointerLockElement !== dom) {
           dom.requestPointerLock?.();
@@ -170,7 +184,7 @@ export function Player({
       dom.removeEventListener('mousedown', handleMouseDown);
       document.removeEventListener('pointerlockchange', handlePointerLock);
     };
-  }, [gl, hasWeapon, onPointerLockChange]);
+  }, [gl, hasWeapon, isGrimoireOpen, onPointerLockChange]);
 
   const weaponElement = useMemo(() => {
     if (!hasWeapon) return null;

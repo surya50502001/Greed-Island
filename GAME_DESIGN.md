@@ -15,20 +15,24 @@ A stylized 3D open-world browser game built with **Vite + React + TypeScript** a
 ## Controls
 - **Ground Movement**: `WASD` move relative to camera, `Shift` sprint, `Space` jump, `Left-Click` attack (with Weapon summoned).
 - **Camera**: Over-the-shoulder third-person follow camera; click canvas for Pointer Lock mouse orbit (or drag to orbit).
-- **Flight Movement** (when `[1] Flight` is active): `WASD` fly in 3D camera direction, `Space` ascend, `C` descend, `Shift` high-speed air boost.
+- **Flight Movement** (when `Flight` is active): `WASD` fly in 3D camera direction, `Space` ascend, `C` descend, `Shift` high-speed air boost.
+- **Grimoire**: Press `G` to summon/dismiss the 3D Grimoire, or `Escape` to close without casting. Hover cards to preview and click to cast.
 
-## 3-Card Hotbar (`1`, `2`, `3` Keys)
-| Key | Card | Effect |
+## Summonable Grimoire & Cards (`G` Key)
+Instead of a permanent hotbar, pressing `G` materializes an ancient 3D Grimoire with glowing runes, swirling particles, animated cover & page turning, and 3 holographic cards arranged in an arc:
+
+| Card | Category / Rarity | Effect |
 | --- | --- | --- |
-| `[1]` | **Flight** | Toggles free 3D flight, activates glowing wind/aura rings, tilts character forward into a flying pose, and displays airborne key hints. |
-| `[2]` | **Weapon** | Materializes a glowing 3D energy sword attached to `mixamorigRightHand` and enables `Left-Click` melee slash attacks with a swing trail. |
-| `[3]` | **Invisibility** | Sets character mesh opacity to `0.25` for `8.0s` with a live HUD countdown timer; patrolling enemies immediately stop chasing while active. |
+| **Flight** | Aerial Spell · Epic | Toggles free 3D flight, activates glowing wind/aura rings, tilts character forward into a flying pose, and shows airborne hints. |
+| **Weapon** | Conjuration · Rare | Materializes a glowing 3D energy sword attached to `mixamorigRightHand` and enables `Left-Click` melee slash attacks with a swing trail. |
+| **Invisibility** | Illusion · Mythic | Sets character mesh opacity to `0.25` for `8.0s` with a live HUD countdown pill; patrolling enemies immediately stop chasing while active. |
 
 ## Architecture
-- `src/types/game.ts` — Shared constants (`ISLAND_RADIUS`, `WATER_LEVEL`, `INVISIBILITY_DURATION`, `LANDMARKS`).
+- `src/types/game.ts` — Shared constants (`ISLAND_RADIUS`, `WATER_LEVEL`, `INVISIBILITY_DURATION`, `LANDMARKS`, `CARD_DEFINITIONS`).
 - `src/world/terrain.ts` — Deterministic `getTerrainHeight`, `getTerrainColor`, and prop placement.
 - `src/components/World.tsx` & `Landmarks.tsx` — Terrain mesh, ocean, sky/clouds, trees, rocks, and 4 landmarks.
-- `src/components/Player.tsx` — Rigged `Soldier.glb` character (`useGLTF` + `useAnimations`), over-the-shoulder camera, ground/flight physics, weapon attachment & melee hit detection.
+- `src/components/Player.tsx` — Rigged `Soldier.glb` character (`useGLTF` + `useAnimations`), over-the-shoulder camera, ground/flight physics, weapon attachment & melee hit detection, and pointer-lock release when browsing the Grimoire.
+- `src/components/Grimoire.tsx` & `GrimoireCard.tsx` — 3D summonable book, animated cover/pages, particle/rune effects, and interactive holographic cards.
 - `src/components/Enemies.tsx` — Patrol/chase AI and defeat/respawn loop.
-- `src/components/HUD.tsx` — Minimal bottom-center 3-card hotbar, active badges, invisibility timer bar, and airborne flight hints.
-- `src/App.tsx` — Canvas, lighting, `<Suspense>`, card state, and `1/2/3` keybindings.
+- `src/components/HUD.tsx` — Minimal active-status pills, airborne flight hints, and Grimoire summon prompt (no permanent 3-card hotbar).
+- `src/App.tsx` — Canvas, lighting, `<Suspense>`, card state, and `G` / `Escape` keybindings.

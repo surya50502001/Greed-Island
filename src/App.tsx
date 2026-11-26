@@ -2,17 +2,19 @@ import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Sky } from '@react-three/drei';
 import * as THREE from 'three';
-import { INVISIBILITY_DURATION } from './types/game';
+import { CardId, INVISIBILITY_DURATION } from './types/game';
 import { getTerrainHeight } from './world/terrain';
 import { World } from './components/World';
 import { createInitialEnemies, Enemies, EnemyEntity } from './components/Enemies';
 import { Player } from './components/Player';
+import { Grimoire } from './components/Grimoire';
 import { HUD } from './components/HUD';
 
 export function App() {
   const [isFlying, setIsFlying] = useState(false);
   const [hasWeapon, setHasWeapon] = useState(false);
   const [invisTimer, setInvisTimer] = useState(0);
+  const [isGrimoireOpen, setIsGrimoireOpen] = useState(false);
   const [, setPointerLocked] = useState(false);
 
   const playerPosRef = useRef<THREE.Vector3>(
@@ -20,33 +22,29 @@ export function App() {
   );
   const enemiesRef = useRef<EnemyEntity[]>(createInitialEnemies());
 
-  const toggleFlight = useCallback(() => {
-    setIsFlying((prev) => !prev);
+  const handleActivateCard = useCallback((id: CardId) => {
+    if (id === 'flight') {
+      setIsFlying((prev) => !prev);
+    } else if (id === 'weapon') {
+      setHasWeapon((prev) => !prev);
+    } else if (id === 'invisibility') {
+      setInvisTimer(INVISIBILITY_DURATION);
+    }
   }, []);
 
-  const toggleWeapon = useCallback(() => {
-    setHasWeapon((prev) => !prev);
-  }, []);
-
-  const triggerInvisibility = useCallback(() => {
-    setInvisTimer(INVISIBILITY_DURATION);
-  }, []);
-
-  // 1, 2, 3 hotbar keybindings
+  // Grimoire summon / dismiss keybindings (G to toggle, Escape to close)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
-      if (e.code === 'Digit1') {
-        toggleFlight();
-      } else if (e.code === 'Digit2') {
-        toggleWeapon();
-      } else if (e.code === 'Digit3') {
-        triggerInvisibility();
+      if (e.code === 'KeyG') {
+        setIsGrimoireOpen((prev) => !prev);
+      } else if (e.code === 'Escape') {
+        setIsGrimoireOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [toggleFlight, toggleWeapon, triggerInvisibility]);
+  }, []);
 
   // Invisibility countdown timer
   useEffect(() => {
@@ -66,7 +64,7 @@ export function App() {
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       <Canvas
         shadows
-        camera={{ fov: 60, near: 0.2, far: 600, position: [0, 6, 10] }}
+        camera={{ fov: 60, near: 0.1, far: 600, position: [0, 6, 10] }}
         onContextMenu={(e) => e.preventDefault()}
       >
         <Sky
@@ -106,18 +104,25 @@ export function App() {
             isFlying={isFlying}
             hasWeapon={hasWeapon}
             isInvisible={isInvisible}
+            isGrimoireOpen={isGrimoireOpen}
             onPointerLockChange={setPointerLocked}
           />
         </Suspense>
+        <Grimoire
+          isOpen={isGrimoireOpen}
+          isFlying={isFlying}
+          hasWeapon={hasWeapon}
+          isInvisible={isInvisible}
+          onActivateCard={handleActivateCard}
+          onClose={() => setIsGrimoireOpen(false)}
+        />
       </Canvas>
 
       <HUD
         isFlying={isFlying}
         hasWeapon={hasWeapon}
         invisTimer={invisTimer}
-        onToggleFlight={toggleFlight}
-        onToggleWeapon={toggleWeapon}
-        onTriggerInvis={triggerInvisibility}
+        isGrimoireOpen={isGrimoireOpen}
       />
     </div>
   );
