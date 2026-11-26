@@ -1,5 +1,4 @@
-export const DEFAULT_CHARACTER_MODEL_URL =
-  'https://threejs.org/examples/models/gltf/Soldier.glb';
+export const DEFAULT_CHARACTER_MODEL_URL = '/models/adventurer.glb';
 
 export type CharacterLocomotionState =
   | 'Idle'
@@ -41,7 +40,7 @@ export interface ClipResolution {
  * automatically binds native clips.
  */
 export const STATE_CLIP_CANDIDATES: Record<CharacterLocomotionState, string[]> = {
-  Idle: ['Idle', 'idle'],
+  Idle: ['Idle', 'idle', 'Armature|Armature|mixamo.com|Layer0.001'],
   StartMoving: ['StartMoving', 'Start_Walk', 'WalkStart'],
   StopMoving: ['StopMoving', 'Stop_Walk', 'WalkStop'],
   Walk: ['Walk', 'walk'],
@@ -118,6 +117,9 @@ export function resolveClipForState(
     default:
       if (availableClips.includes('Idle')) {
         return { clipName: 'Idle', isNativeClip: false };
+      }
+      if (availableClips.length > 0) {
+        return { clipName: availableClips[0], isNativeClip: false };
       }
       break;
   }

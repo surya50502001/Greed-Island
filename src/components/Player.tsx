@@ -53,6 +53,8 @@ export function Player({
 
   const [rightHandBone, setRightHandBone] = useState<THREE.Object3D | null>(null);
   const [handInvScale, setHandInvScale] = useState<number>(1);
+  const [modelNormScale, setModelNormScale] = useState<number>(1);
+  const [modelOffsetY, setModelOffsetY] = useState<number>(0);
 
   const camYawRef = useRef(Math.PI);
   const camPitchRef = useRef(0.14);
@@ -77,7 +79,7 @@ export function Player({
     };
   }, [hitTriggerRef, hasWeapon, isGrimoireOpen]);
 
-  // Configure shadows, log available & missing clips, and locate mixamorigRightHand bone once loaded
+  // Configure shadows, normalize height to ~1.85m, log clips, and locate RightHand bone
   useEffect(() => {
     const clipNames = animations.map((c) => c.name);
     const clipSummary = animations.map((c) => `${c.name} (${c.duration.toFixed(2)}s)`);
@@ -88,20 +90,29 @@ export function Player({
     }
 
     scene.updateMatrixWorld(true);
+    let hand: THREE.Object3D | null = null;
     scene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         obj.castShadow = true;
         obj.receiveShadow = true;
       }
+      if (!hand && /RightHand(_\d+)?$/i.test(obj.name)) {
+        hand = obj;
+      }
     });
 
-    const hand =
-      scene.getObjectByName('mixamorigRightHand') ??
-      scene.getObjectByName('mixamorig:RightHand');
+    // Normalize model height to ~1.85 units and ground feet at y=0
+    const box = new THREE.Box3().setFromObject(scene);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const normScale = size.y > 0.01 ? 1.85 / size.y : 1;
+    setModelNormScale(normScale);
+    setModelOffsetY(-box.min.y * normScale);
+
     if (hand) {
       const worldScale = new THREE.Vector3();
-      hand.getWorldScale(worldScale);
-      setHandInvScale(1 / (worldScale.x || 1));
+      (hand as THREE.Object3D).getWorldScale(worldScale);
+      setHandInvScale(1 / ((worldScale.x || 1) * normScale));
       setRightHandBone(hand);
     }
   }, [scene, animations, modelUrl]);
@@ -393,10 +404,17 @@ export function Player({
     camera.lookAt(camTargetRef.current);
   });
 
+  const isSoldierModel = modelUrl.includes('Soldier.glb');
+
   return (
     <group ref={groupRef} position={[0, getTerrainHeight(0, 0), 0]}>
       <group ref={tiltGroupRef}>
-        <group ref={modelRef} rotation={[0, Math.PI, 0]} scale={1.05}>
+        <group
+          ref={modelRef}
+          position={[0, modelOffsetY, 0]}
+          rotation={[0, isSoldierModel ? Math.PI : 0, 0]}
+          scale={modelNormScale}
+        >
           <primitive object={scene} />
         </group>
       </group>
