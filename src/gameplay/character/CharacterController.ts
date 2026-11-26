@@ -62,10 +62,22 @@ export class CharacterController {
   private readonly attackDuration = 0.42;
   private readonly dodgeDuration = 0.36;
 
-  // Reusable math vectors
+  // Reusable math vectors & step result (zero per-frame allocations)
   private readonly forwardVec = new THREE.Vector3();
   private readonly rightVec = new THREE.Vector3();
   private readonly moveDir = new THREE.Vector3();
+  private readonly stepResult: CharacterStepResult = {
+    state: 'Idle',
+    horizSpeed: 0,
+    verticalVelocity: 0,
+    grounded: true,
+    attackProgress: 0,
+    isAttackActiveHitWindow: false,
+    hitReactionProgress: 0,
+    isBlocking: false,
+    flightTiltX: 0,
+    flightRollZ: 0,
+  };
 
   constructor(initialX = 0, initialZ = 0) {
     this.position = new THREE.Vector3(initialX, getTerrainHeight(initialX, initialZ), initialZ);
@@ -102,7 +114,16 @@ export class CharacterController {
 
   public triggerAttack(hasWeapon: boolean, isGrimoireOpen: boolean): boolean {
     if (!hasWeapon || isGrimoireOpen) return false;
-    if (this.attackCooldown > 0 || this.hitReactionTimer > 0 || this.dodgeTimer > 0) return false;
+    const input = this.readInputs(isGrimoireOpen);
+    if (
+      this.attackCooldown > 0 ||
+      this.hitReactionTimer > 0 ||
+      this.dodgeTimer > 0 ||
+      this.pendingJump ||
+      input.block
+    ) {
+      return false;
+    }
     this.attackTimer = this.attackDuration;
     this.attackCooldown = 0.48;
     return true;
@@ -374,18 +395,19 @@ export class CharacterController {
     const isAttackActiveHitWindow =
       this.attackTimer > 0 && attackProgress >= 0.24 && attackProgress <= 0.68;
 
-    return {
-      state,
-      horizSpeed,
-      verticalVelocity: this.velocity.y,
-      grounded: this.grounded,
-      attackProgress,
-      isAttackActiveHitWindow,
-      hitReactionProgress: this.hitReactionTimer > 0 ? 1 - this.hitReactionTimer / 0.35 : 0,
-      isBlocking,
-      flightTiltX,
-      flightRollZ,
-    };
+    this.stepResult.state = state;
+    this.stepResult.horizSpeed = horizSpeed;
+    this.stepResult.verticalVelocity = this.velocity.y;
+    this.stepResult.grounded = this.grounded;
+    this.stepResult.attackProgress = attackProgress;
+    this.stepResult.isAttackActiveHitWindow = isAttackActiveHitWindow;
+    this.stepResult.hitReactionProgress =
+      this.hitReactionTimer > 0 ? 1 - this.hitReactionTimer / 0.35 : 0;
+    this.stepResult.isBlocking = isBlocking;
+    this.stepResult.flightTiltX = flightTiltX;
+    this.stepResult.flightRollZ = flightRollZ;
+
+    return this.stepResult;
   }
 
   private rotateTowards(targetYaw: number, turnRate: number, dt: number): void {

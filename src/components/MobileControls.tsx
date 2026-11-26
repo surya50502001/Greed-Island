@@ -32,17 +32,51 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   const stickBaseRef = useRef<HTMLDivElement>(null);
   const stickPointerId = useRef<number | null>(null);
 
-  // Clear touch inputs if controls are hidden or Grimoire opens
+  // Release all touch inputs when hidden, Grimoire opens, or window loses focus
   useEffect(() => {
-    if (!visible || isGrimoireOpen) {
+    const releaseAll = () => {
       setKnobOffset({ x: 0, y: 0 });
       stickPointerId.current = null;
       touchBridgeRef.current?.setMove(0, 0);
       touchBridgeRef.current?.setAction('jump', false);
       touchBridgeRef.current?.setAction('descend', false);
       touchBridgeRef.current?.setAction('block', false);
+      if (!visible) {
+        setSprintLocked(false);
+        touchBridgeRef.current?.setAction('sprint', false);
+      }
+    };
+
+    if (!visible || isGrimoireOpen) {
+      releaseAll();
     }
+
+    const handleBlur = () => {
+      setSprintLocked(false);
+      touchBridgeRef.current?.setAction('sprint', false);
+      releaseAll();
+    };
+    const handleVisibility = () => {
+      if (document.hidden) handleBlur();
+    };
+
+    window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [visible, isGrimoireOpen, touchBridgeRef]);
+
+  // Release state-specific held buttons when gameplay state changes (e.g. flight or weapon toggled)
+  useEffect(() => {
+    if (!hasWeapon || isFlying) {
+      touchBridgeRef.current?.setAction('block', false);
+    }
+    if (!isFlying) {
+      touchBridgeRef.current?.setAction('descend', false);
+    }
+  }, [hasWeapon, isFlying, touchBridgeRef]);
 
   const updateJoystick = (clientX: number, clientY: number) => {
     const el = stickBaseRef.current;

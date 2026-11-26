@@ -21,6 +21,7 @@ export class CharacterAnimationController {
 
     const clipChanged = this.currentClipName !== resolved.clipName;
     const isOneShot = Boolean(resolved.loopOnce && resolved.isNativeClip);
+    const reverse = Boolean(resolved.reverse);
 
     // Only crossfade when the underlying clip actually changes (prevents restart/snapping
     // when multiple fallback states resolve to the same clip).
@@ -38,12 +39,21 @@ export class CharacterAnimationController {
       }
 
       prevAction?.fadeOut(blendDuration);
-      nextAction.reset().fadeIn(blendDuration).play();
+      nextAction.reset();
+      nextAction.enabled = true;
+      nextAction.setEffectiveWeight(1);
+
+      // Start reversed clips at the end of the clip so they don't clamp/snap at t=0
+      if (reverse) {
+        nextAction.time = nextAction.getClip().duration;
+      }
+
+      nextAction.fadeIn(blendDuration).play();
       this.currentClipName = resolved.clipName;
     }
 
     this.currentState = state;
-    this.currentReverse = Boolean(resolved.reverse);
+    this.currentReverse = reverse;
 
     // Match animation playback speed to ground movement speed to reduce foot sliding
     if (resolved.clipName === 'Walk') {
@@ -62,7 +72,12 @@ export class CharacterAnimationController {
   }
 
   public dispose(actions: Record<string, THREE.AnimationAction | null>): void {
-    Object.values(actions).forEach((action) => action?.stop());
+    Object.values(actions).forEach((action) => {
+      if (action) {
+        action.stop();
+        action.enabled = false;
+      }
+    });
     this.currentState = null;
     this.currentClipName = null;
     this.currentReverse = false;
