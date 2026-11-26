@@ -11,6 +11,13 @@ import {
   getMissingStatesForClips,
 } from '../gameplay/character/CharacterStates';
 
+export interface PlayerTouchBridge {
+  setMove: (x: number, y: number) => void;
+  setAction: (action: 'sprint' | 'jump' | 'descend' | 'block', pressed: boolean) => void;
+  triggerAttack: () => void;
+  triggerDodge: () => void;
+}
+
 interface PlayerProps {
   modelUrl?: string;
   playerPosRef: React.MutableRefObject<THREE.Vector3>;
@@ -20,6 +27,7 @@ interface PlayerProps {
   isInvisible: boolean;
   isGrimoireOpen: boolean;
   hitTriggerRef?: React.MutableRefObject<(() => void) | null>;
+  touchBridgeRef?: React.MutableRefObject<PlayerTouchBridge | null>;
   onPointerLockChange: (locked: boolean) => void;
 }
 
@@ -32,6 +40,7 @@ export function Player({
   isInvisible,
   isGrimoireOpen,
   hitTriggerRef,
+  touchBridgeRef,
   onPointerLockChange,
 }: PlayerProps) {
   const { camera, gl } = useThree();
@@ -65,19 +74,32 @@ export function Player({
   const camTargetRef = useRef(new THREE.Vector3());
   const camPosRef = useRef(new THREE.Vector3());
 
-  // Expose hit reaction trigger to parent/enemy system
+  // Expose hit reaction & touch bridge to parent
   useEffect(() => {
     if (hitTriggerRef) {
       hitTriggerRef.current = () => {
         controllerRef.current.triggerHitReaction(hasWeapon, isGrimoireOpen);
       };
     }
+    if (touchBridgeRef) {
+      touchBridgeRef.current = {
+        setMove: (x, y) => controllerRef.current.setTouchMove(x, y),
+        setAction: (action, pressed) => controllerRef.current.setTouchAction(action, pressed),
+        triggerAttack: () => {
+          if (controllerRef.current.triggerAttack(hasWeapon, isGrimoireOpen)) {
+            hitEnemiesThisAttackRef.current.clear();
+          }
+        },
+        triggerDodge: () => {
+          controllerRef.current.triggerDodge(isFlying, isGrimoireOpen);
+        },
+      };
+    }
     return () => {
-      if (hitTriggerRef) {
-        hitTriggerRef.current = null;
-      }
+      if (hitTriggerRef) hitTriggerRef.current = null;
+      if (touchBridgeRef) touchBridgeRef.current = null;
     };
-  }, [hitTriggerRef, hasWeapon, isGrimoireOpen]);
+  }, [hitTriggerRef, touchBridgeRef, hasWeapon, isFlying, isGrimoireOpen]);
 
   // Configure shadows, normalize height to ~1.85m, log clips, and locate RightHand bone
   useEffect(() => {
@@ -214,6 +236,48 @@ export function Player({
       onPointerLockChange(document.pointerLockElement === dom);
     };
 
+    // Touch-drag camera orbit on the 3D canvas (supports multi-touch alongside joystick)
+    let activeTouchId: number | null = null;
+    let lastTouchX = 0;
+    let lastTouchY = 0;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (isGrimoireOpen || activeTouchId !== null) return;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      activeTouchId = t.identifier;
+      lastTouchX = t.clientX;
+      lastTouchY = t.clientY;
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (isGrimoireOpen || activeTouchId === null) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        if (t.identifier === activeTouchId) {
+          const dx = t.clientX - lastTouchX;
+          const dy = t.clientY - lastTouchY;
+          lastTouchX = t.clientX;
+          lastTouchY = t.clientY;
+          camYawRef.current -= dx * 0.0055;
+          camPitchRef.current = Math.max(
+            -0.55,
+            Math.min(0.95, camPitchRef.current + dy * 0.0045)
+          );
+          break;
+        }
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === activeTouchId) {
+          activeTouchId = null;
+          break;
+        }
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('blur', handleWindowBlur);
@@ -221,6 +285,10 @@ export function Player({
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     dom.addEventListener('mousedown', handleMouseDown);
+    dom.addEventListener('touchstart', handleTouchStart, { passive: true });
+    dom.addEventListener('touchmove', handleTouchMove, { passive: true });
+    dom.addEventListener('touchend', handleTouchEnd, { passive: true });
+    dom.addEventListener('touchcancel', handleTouchEnd, { passive: true });
     document.addEventListener('pointerlockchange', handlePointerLock);
 
     return () => {
@@ -231,6 +299,10 @@ export function Player({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       dom.removeEventListener('mousedown', handleMouseDown);
+      dom.removeEventListener('touchstart', handleTouchStart);
+      dom.removeEventListener('touchmove', handleTouchMove);
+      dom.removeEventListener('touchend', handleTouchEnd);
+      dom.removeEventListener('touchcancel', handleTouchEnd);
       document.removeEventListener('pointerlockchange', handlePointerLock);
     };
   }, [gl, hasWeapon, isFlying, isGrimoireOpen, onPointerLockChange]);

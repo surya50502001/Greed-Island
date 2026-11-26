@@ -6,9 +6,10 @@ import { CardId, INVISIBILITY_DURATION } from './types/game';
 import { getTerrainHeight } from './world/terrain';
 import { World } from './components/World';
 import { createInitialEnemies, Enemies, EnemyEntity } from './components/Enemies';
-import { Player } from './components/Player';
+import { Player, PlayerTouchBridge } from './components/Player';
 import { Grimoire } from './components/Grimoire';
 import { HUD } from './components/HUD';
+import { MobileControls } from './components/MobileControls';
 
 export function App() {
   const [isFlying, setIsFlying] = useState(false);
@@ -22,6 +23,7 @@ export function App() {
   );
   const enemiesRef = useRef<EnemyEntity[]>(createInitialEnemies());
   const hitTriggerRef = useRef<(() => void) | null>(null);
+  const touchBridgeRef = useRef<PlayerTouchBridge | null>(null);
 
   const handleActivateCard = useCallback((id: CardId) => {
     if (id === 'flight') {
@@ -108,6 +110,7 @@ export function App() {
             isInvisible={isInvisible}
             isGrimoireOpen={isGrimoireOpen}
             hitTriggerRef={hitTriggerRef}
+            touchBridgeRef={touchBridgeRef}
             onPointerLockChange={setPointerLocked}
           />
         </Suspense>
@@ -126,6 +129,13 @@ export function App() {
         hasWeapon={hasWeapon}
         invisTimer={invisTimer}
         isGrimoireOpen={isGrimoireOpen}
+      />
+      <MobileControls
+        touchBridgeRef={touchBridgeRef}
+        isFlying={isFlying}
+        hasWeapon={hasWeapon}
+        isGrimoireOpen={isGrimoireOpen}
+        onToggleGrimoire={() => setIsGrimoireOpen((prev) => !prev)}
       />
     </div>
   );

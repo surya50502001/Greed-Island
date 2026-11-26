@@ -34,6 +34,12 @@ export class CharacterController {
   public grounded = true;
 
   private keys: Record<string, boolean> = {};
+  private touchMoveX = 0;
+  private touchMoveY = 0;
+  private touchSprint = false;
+  private touchJump = false;
+  private touchDescend = false;
+  private touchBlock = false;
   private prevIsFlying = false;
   private pendingFlightLand = false;
   private wasMoving = false;
@@ -69,8 +75,29 @@ export class CharacterController {
     this.keys[code] = pressed;
   }
 
+  public setTouchMove(x: number, y: number): void {
+    this.touchMoveX = THREE.MathUtils.clamp(x, -1, 1);
+    this.touchMoveY = THREE.MathUtils.clamp(y, -1, 1);
+  }
+
+  public setTouchAction(
+    action: 'sprint' | 'jump' | 'descend' | 'block',
+    pressed: boolean
+  ): void {
+    if (action === 'sprint') this.touchSprint = pressed;
+    else if (action === 'jump') this.touchJump = pressed;
+    else if (action === 'descend') this.touchDescend = pressed;
+    else if (action === 'block') this.touchBlock = pressed;
+  }
+
   public clearInputs(): void {
     this.keys = {};
+    this.touchMoveX = 0;
+    this.touchMoveY = 0;
+    this.touchSprint = false;
+    this.touchJump = false;
+    this.touchDescend = false;
+    this.touchBlock = false;
   }
 
   public triggerAttack(hasWeapon: boolean, isGrimoireOpen: boolean): boolean {
@@ -112,14 +139,14 @@ export class CharacterController {
       };
     }
     return {
-      forward: Boolean(this.keys['KeyW'] || this.keys['ArrowUp']),
-      backward: Boolean(this.keys['KeyS'] || this.keys['ArrowDown']),
-      left: Boolean(this.keys['KeyA'] || this.keys['ArrowLeft']),
-      right: Boolean(this.keys['KeyD'] || this.keys['ArrowRight']),
-      sprint: Boolean(this.keys['ShiftLeft'] || this.keys['ShiftRight']),
-      jump: Boolean(this.keys['Space']),
-      descend: Boolean(this.keys['KeyC']),
-      block: Boolean(this.keys['KeyF']),
+      forward: Boolean(this.keys['KeyW'] || this.keys['ArrowUp']) || this.touchMoveY > 0.2,
+      backward: Boolean(this.keys['KeyS'] || this.keys['ArrowDown']) || this.touchMoveY < -0.2,
+      left: Boolean(this.keys['KeyA'] || this.keys['ArrowLeft']) || this.touchMoveX < -0.2,
+      right: Boolean(this.keys['KeyD'] || this.keys['ArrowRight']) || this.touchMoveX > 0.2,
+      sprint: Boolean(this.keys['ShiftLeft'] || this.keys['ShiftRight']) || this.touchSprint,
+      jump: Boolean(this.keys['Space']) || this.touchJump,
+      descend: Boolean(this.keys['KeyC']) || this.touchDescend,
+      block: Boolean(this.keys['KeyF']) || this.touchBlock,
     };
   }
 
