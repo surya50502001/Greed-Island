@@ -21,6 +21,7 @@ export function App() {
     new THREE.Vector3(0, getTerrainHeight(0, 0), 0)
   );
   const enemiesRef = useRef<EnemyEntity[]>(createInitialEnemies());
+  const hitTriggerRef = useRef<(() => void) | null>(null);
 
   const handleActivateCard = useCallback((id: CardId) => {
     if (id === 'flight') {
@@ -96,6 +97,7 @@ export function App() {
           enemiesRef={enemiesRef}
           playerPosRef={playerPosRef}
           isInvisible={isInvisible}
+          onPlayerHit={() => hitTriggerRef.current?.()}
         />
         <Suspense fallback={null}>
           <Player
@@ -105,6 +107,7 @@ export function App() {
             hasWeapon={hasWeapon}
             isInvisible={isInvisible}
             isGrimoireOpen={isGrimoireOpen}
+            hitTriggerRef={hitTriggerRef}
             onPointerLockChange={setPointerLocked}
           />
         </Suspense>

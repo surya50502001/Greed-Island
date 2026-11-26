@@ -2,33 +2,37 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal, useFrame, useThree } from '@react-three/fiber';
 import { useAnimations, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
-import { ISLAND_RADIUS } from '../types/game';
 import { getTerrainHeight } from '../world/terrain';
 import { EnemyEntity } from './Enemies';
-
-const SOLDIER_URL = 'https://threejs.org/examples/models/gltf/Soldier.glb';
+import { CharacterController } from '../gameplay/character/CharacterController';
+import { CharacterAnimationController } from '../gameplay/character/CharacterAnimationController';
+import { DEFAULT_CHARACTER_MODEL_URL } from '../gameplay/character/CharacterStates';
 
 interface PlayerProps {
+  modelUrl?: string;
   playerPosRef: React.MutableRefObject<THREE.Vector3>;
   enemiesRef: React.MutableRefObject<EnemyEntity[]>;
   isFlying: boolean;
   hasWeapon: boolean;
   isInvisible: boolean;
   isGrimoireOpen: boolean;
+  hitTriggerRef?: React.MutableRefObject<(() => void) | null>;
   onPointerLockChange: (locked: boolean) => void;
 }
 
 export function Player({
+  modelUrl = DEFAULT_CHARACTER_MODEL_URL,
   playerPosRef,
   enemiesRef,
   isFlying,
   hasWeapon,
   isInvisible,
   isGrimoireOpen,
+  hitTriggerRef,
   onPointerLockChange,
 }: PlayerProps) {
   const { camera, gl } = useThree();
-  const { scene, animations } = useGLTF(SOLDIER_URL);
+  const { scene, animations } = useGLTF(modelUrl);
 
   const groupRef = useRef<THREE.Group>(null);
   const tiltGroupRef = useRef<THREE.Group>(null);
@@ -38,30 +42,37 @@ export function Player({
   const weaponGroupRef = useRef<THREE.Group>(null);
 
   const { actions } = useAnimations(animations, modelRef);
-  const currentAnimRef = useRef<string>('');
+
+  const controllerRef = useRef<CharacterController>(new CharacterController(0, 0));
+  const animControllerRef = useRef<CharacterAnimationController>(
+    new CharacterAnimationController()
+  );
 
   const [rightHandBone, setRightHandBone] = useState<THREE.Object3D | null>(null);
   const [handInvScale, setHandInvScale] = useState<number>(1);
 
-  // Physics & input state in refs for 60fps zero-re-render loop
-  const velocityRef = useRef(new THREE.Vector3());
-  const groundedRef = useRef(true);
-  const playerYawRef = useRef(0);
   const camYawRef = useRef(Math.PI);
   const camPitchRef = useRef(0.14);
   const isDraggingRef = useRef(false);
+  const attackHitRegisteredRef = useRef(false);
 
-  const keysRef = useRef<Record<string, boolean>>({});
-  const attackTimerRef = useRef(0);
-  const attackCooldownRef = useRef(0);
-  const attackHitDoneRef = useRef(false);
-
-  // Reusable vectors
+  // Reusable camera vectors
   const camTargetRef = useRef(new THREE.Vector3());
   const camPosRef = useRef(new THREE.Vector3());
-  const forwardRef = useRef(new THREE.Vector3());
-  const rightRef = useRef(new THREE.Vector3());
-  const moveDirRef = useRef(new THREE.Vector3());
+
+  // Expose hit reaction trigger to parent/enemy system
+  useEffect(() => {
+    if (hitTriggerRef) {
+      hitTriggerRef.current = () => {
+        controllerRef.current.triggerHitReaction();
+      };
+    }
+    return () => {
+      if (hitTriggerRef) {
+        hitTriggerRef.current = null;
+      }
+    };
+  }, [hitTriggerRef]);
 
   // Configure shadows and locate mixamorigRightHand bone once loaded
   useEffect(() => {
@@ -73,7 +84,9 @@ export function Player({
       }
     });
 
-    const hand = scene.getObjectByName('mixamorigRightHand');
+    const hand =
+      scene.getObjectByName('mixamorigRightHand') ??
+      scene.getObjectByName('mixamorig:RightHand');
     if (hand) {
       const worldScale = new THREE.Vector3();
       hand.getWorldScale(worldScale);
@@ -82,7 +95,7 @@ export function Player({
     }
   }, [scene]);
 
-  // Apply 0.25 opacity to Soldier meshes when [3] Invisibility is active
+  // Apply 0.25 opacity to character meshes when [3] Invisibility is active
   useEffect(() => {
     scene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
@@ -99,21 +112,18 @@ export function Player({
     });
   }, [scene, isInvisible]);
 
-  // Start with Idle animation
+  // Cleanup animation actions on unmount
   useEffect(() => {
-    const idle = actions['Idle'];
-    if (idle) {
-      idle.reset().fadeIn(0.2).play();
-      currentAnimRef.current = 'Idle';
-    }
+    const animCtrl = animControllerRef.current;
     return () => {
-      Object.values(actions).forEach((action) => action?.stop());
+      animCtrl.dispose(actions);
     };
   }, [actions]);
 
-  // Release pointer lock when Grimoire opens so mouse can interact with 3D cards
+  // Clear held inputs and release pointer lock when Grimoire opens
   useEffect(() => {
     if (isGrimoireOpen) {
+      controllerRef.current.clearInputs();
       isDraggingRef.current = false;
       if (document.pointerLockElement === gl.domElement) {
         document.exitPointerLock?.();
@@ -121,15 +131,26 @@ export function Player({
     }
   }, [isGrimoireOpen, gl]);
 
-  // Keyboard & mouse controls
+  // Keyboard, mouse, and window focus listeners
   useEffect(() => {
     const dom = gl.domElement;
+    const ctrl = controllerRef.current;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      keysRef.current[e.code] = true;
+      ctrl.setKey(e.code, true);
     };
     const handleKeyUp = (e: KeyboardEvent) => {
-      keysRef.current[e.code] = false;
+      ctrl.setKey(e.code, false);
+    };
+    const handleWindowBlur = () => {
+      ctrl.clearInputs();
+      isDraggingRef.current = false;
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        ctrl.clearInputs();
+        isDraggingRef.current = false;
+      }
     };
 
     const handleMouseMove = (e: MouseEvent) => {
@@ -151,10 +172,8 @@ export function Player({
           dom.requestPointerLock?.();
           isDraggingRef.current = true;
         }
-        if (hasWeapon && attackCooldownRef.current <= 0) {
-          attackTimerRef.current = 0.28;
-          attackCooldownRef.current = 0.36;
-          attackHitDoneRef.current = false;
+        if (ctrl.triggerAttack(hasWeapon, isGrimoireOpen)) {
+          attackHitRegisteredRef.current = false;
         }
       } else if (e.button === 2) {
         isDraggingRef.current = true;
@@ -171,6 +190,8 @@ export function Player({
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleWindowBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     dom.addEventListener('mousedown', handleMouseDown);
@@ -179,6 +200,8 @@ export function Player({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleWindowBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       dom.removeEventListener('mousedown', handleMouseDown);
@@ -195,17 +218,14 @@ export function Player({
         position={[0, 0.08 * handInvScale, 0.04 * handInvScale]}
         rotation={[Math.PI / 2, 0, 0]}
       >
-        {/* Hilt */}
         <mesh>
           <cylinderGeometry args={[0.035, 0.035, 0.28, 8]} />
           <meshStandardMaterial color="#1f2937" metalness={0.5} roughness={0.4} />
         </mesh>
-        {/* Crossguard */}
         <mesh position={[0, 0.14, 0]}>
           <boxGeometry args={[0.28, 0.06, 0.09]} />
           <meshStandardMaterial color="#fbbf24" metalness={0.7} roughness={0.25} />
         </mesh>
-        {/* Glowing Energy Blade */}
         <mesh position={[0, 0.78, 0]}>
           <boxGeometry args={[0.085, 1.24, 0.03]} />
           <meshStandardMaterial
@@ -221,178 +241,84 @@ export function Player({
 
   useFrame(({ clock }, delta) => {
     const dt = Math.min(delta, 0.05);
-    const keys = keysRef.current;
-    const pos = playerPosRef.current;
-    const vel = velocityRef.current;
+    const ctrl = controllerRef.current;
 
-    const w = keys['KeyW'] || keys['ArrowUp'] ? 1 : 0;
-    const s = keys['KeyS'] || keys['ArrowDown'] ? 1 : 0;
-    const a = keys['KeyA'] || keys['ArrowLeft'] ? 1 : 0;
-    const d = keys['KeyD'] || keys['ArrowRight'] ? 1 : 0;
-    const shift = Boolean(keys['ShiftLeft'] || keys['ShiftRight']);
-    const space = Boolean(keys['Space']);
-    const crouch = Boolean(keys['KeyC']);
+    const step = ctrl.update(
+      dt,
+      camYawRef.current,
+      camPitchRef.current,
+      isFlying,
+      hasWeapon,
+      isGrimoireOpen
+    );
 
-    const forwardInput = w - s;
-    const strafeInput = d - a;
+    // Sync shared player position ref for Enemies & World
+    playerPosRef.current.copy(ctrl.position);
 
-    const yaw = camYawRef.current;
-    const pitch = camPitchRef.current;
-
-    if (isFlying) {
-      const cosPitch = Math.cos(pitch);
-      forwardRef.current
-        .set(-Math.sin(yaw) * cosPitch, -Math.sin(pitch), -Math.cos(yaw) * cosPitch)
-        .normalize();
-      rightRef.current.set(Math.cos(yaw), 0, -Math.sin(yaw)).normalize();
-
-      moveDirRef.current.set(0, 0, 0);
-      moveDirRef.current.addScaledVector(forwardRef.current, forwardInput);
-      moveDirRef.current.addScaledVector(rightRef.current, strafeInput);
-      if (space) moveDirRef.current.y += 1;
-      if (crouch) moveDirRef.current.y -= 1;
-
-      if (moveDirRef.current.lengthSq() > 0) {
-        moveDirRef.current.normalize();
-      }
-
-      const flySpeed = shift ? 28 : 14;
-      vel.lerp(moveDirRef.current.multiplyScalar(flySpeed), 1 - Math.exp(-8 * dt));
-      pos.addScaledVector(vel, dt);
-
-      const floorY = getTerrainHeight(pos.x, pos.z) + 0.4;
-      if (pos.y < floorY) {
-        pos.y = floorY;
-        if (vel.y < 0) vel.y = 0;
-      }
-      if (pos.y > 95) pos.y = 95;
-      groundedRef.current = false;
-    } else {
-      forwardRef.current.set(-Math.sin(yaw), 0, -Math.cos(yaw)).normalize();
-      rightRef.current.set(Math.cos(yaw), 0, -Math.sin(yaw)).normalize();
-
-      moveDirRef.current.set(0, 0, 0);
-      moveDirRef.current.addScaledVector(forwardRef.current, forwardInput);
-      moveDirRef.current.addScaledVector(rightRef.current, strafeInput);
-      if (moveDirRef.current.lengthSq() > 0) {
-        moveDirRef.current.normalize();
-      }
-
-      const groundSpeed = shift ? 13.0 : 7.4;
-      const targetVx = moveDirRef.current.x * groundSpeed;
-      const targetVz = moveDirRef.current.z * groundSpeed;
-      const accel = groundedRef.current ? 14 : 6;
-      vel.x = THREE.MathUtils.lerp(vel.x, targetVx, 1 - Math.exp(-accel * dt));
-      vel.z = THREE.MathUtils.lerp(vel.z, targetVz, 1 - Math.exp(-accel * dt));
-
-      if (space && groundedRef.current) {
-        vel.y = 11.2;
-        groundedRef.current = false;
-      }
-
-      vel.y -= 28 * dt;
-      pos.x += vel.x * dt;
-      pos.z += vel.z * dt;
-      pos.y += vel.y * dt;
-
-      const groundY = getTerrainHeight(pos.x, pos.z);
-      if (pos.y <= groundY) {
-        pos.y = groundY;
-        vel.y = 0;
-        groundedRef.current = true;
-      } else if (pos.y - groundY > 0.25) {
-        groundedRef.current = false;
-      }
-    }
-
-    // Clamp to island boundary
-    const distFromCenter = Math.hypot(pos.x, pos.z);
-    const maxR = ISLAND_RADIUS - 5;
-    if (distFromCenter > maxR) {
-      const ratio = maxR / distFromCenter;
-      pos.x *= ratio;
-      pos.z *= ratio;
-    }
-
-    // Face movement direction smoothly
-    const horizSpeed = Math.hypot(vel.x, vel.z);
-    if (horizSpeed > 0.4) {
-      const targetYaw = Math.atan2(vel.x, vel.z);
-      let diff = targetYaw - playerYawRef.current;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      playerYawRef.current += diff * Math.min(1, 12 * dt);
-    }
+    // Update animation state machine & speed-matched blending
+    animControllerRef.current.update(step.state, step.horizSpeed, actions);
 
     // Update character root transform
     if (groupRef.current) {
-      groupRef.current.position.copy(pos);
-      groupRef.current.rotation.y = playerYawRef.current;
+      groupRef.current.position.copy(ctrl.position);
+      groupRef.current.rotation.y = ctrl.yaw;
     }
 
-    // Blend Soldier animations (Idle / Walk / Run)
-    let desiredAnim = 'Idle';
-    if (isFlying) {
-      desiredAnim = horizSpeed > 2 ? 'Run' : 'Idle';
-    } else if (horizSpeed > 0.6) {
-      desiredAnim = shift && horizSpeed > 8.5 ? 'Run' : 'Walk';
-    }
-
-    if (desiredAnim !== currentAnimRef.current && actions[desiredAnim]) {
-      const prev = actions[currentAnimRef.current];
-      const next = actions[desiredAnim]!;
-      prev?.fadeOut(0.18);
-      next.reset().fadeIn(0.18).play();
-      currentAnimRef.current = desiredAnim;
-    }
-
-    // Forward flight tilt posture
+    // Subtle posture layer for flight tilt, landing squash, hit stagger, & attack anticipation/recovery
     if (tiltGroupRef.current) {
-      const targetTilt = isFlying ? (horizSpeed > 2 ? 0.72 : 0.38) : 0;
+      let targetTiltX = step.flightTiltX;
+      let targetTwistY = 0;
+      let targetRollZ = step.flightRollZ;
+
+      if (step.state === 'Attack') {
+        const p = step.attackProgress;
+        targetTwistY = p < 0.24 ? -0.45 * (p / 0.24) : -0.45 + ((p - 0.24) / 0.76) * 1.15;
+        targetTiltX += 0.14 * Math.sin(p * Math.PI);
+      } else if (step.state === 'HitReaction') {
+        targetTiltX = -0.28 * Math.sin(step.hitReactionProgress * Math.PI);
+      } else if (step.state === 'Land') {
+        targetTiltX = 0.14;
+      }
+
+      const postureLerp = 1 - Math.exp(-12 * dt);
       tiltGroupRef.current.rotation.x = THREE.MathUtils.lerp(
         tiltGroupRef.current.rotation.x,
-        targetTilt,
-        1 - Math.exp(-8 * dt)
+        targetTiltX,
+        postureLerp
       );
-      // Subtle body twist during sword swing
-      if (attackTimerRef.current > 0) {
-        const progress = 1 - attackTimerRef.current / 0.28;
-        tiltGroupRef.current.rotation.y = -0.6 + progress * 1.2;
-      } else {
-        tiltGroupRef.current.rotation.y = THREE.MathUtils.lerp(
-          tiltGroupRef.current.rotation.y,
-          0,
-          1 - Math.exp(-14 * dt)
-        );
-      }
+      tiltGroupRef.current.rotation.y = THREE.MathUtils.lerp(
+        tiltGroupRef.current.rotation.y,
+        targetTwistY,
+        postureLerp
+      );
+      tiltGroupRef.current.rotation.z = THREE.MathUtils.lerp(
+        tiltGroupRef.current.rotation.z,
+        targetRollZ,
+        postureLerp
+      );
     }
 
-    // Weapon slash & hit detection
-    if (attackCooldownRef.current > 0) {
-      attackCooldownRef.current = Math.max(0, attackCooldownRef.current - dt);
-    }
-    if (attackTimerRef.current > 0) {
-      attackTimerRef.current = Math.max(0, attackTimerRef.current - dt);
-      const progress = 1 - attackTimerRef.current / 0.28;
-
+    // Weapon swing & hit detection synchronized with active attack frames
+    if (step.state === 'Attack') {
+      const p = step.attackProgress;
       if (weaponGroupRef.current) {
-        weaponGroupRef.current.rotation.x = Math.PI / 2 - 0.9 + progress * 1.9;
+        weaponGroupRef.current.rotation.x = Math.PI / 2 - 0.9 + p * 1.9;
       }
       if (slashTrailRef.current) {
-        slashTrailRef.current.visible = true;
-        slashTrailRef.current.rotation.z = -1.1 + progress * 2.2;
+        slashTrailRef.current.visible = step.isAttackActiveHitWindow;
+        slashTrailRef.current.rotation.z = -1.1 + p * 2.2;
       }
 
-      if (!attackHitDoneRef.current && progress >= 0.25) {
-        attackHitDoneRef.current = true;
-        const pFwdX = Math.sin(playerYawRef.current);
-        const pFwdZ = Math.cos(playerYawRef.current);
+      if (step.isAttackActiveHitWindow && !attackHitRegisteredRef.current) {
+        attackHitRegisteredRef.current = true;
+        const pFwdX = Math.sin(ctrl.yaw);
+        const pFwdZ = Math.cos(ctrl.yaw);
 
         for (const enemy of enemiesRef.current) {
           if (!enemy.alive) continue;
-          const dx = enemy.position.x - pos.x;
-          const dy = enemy.position.y - pos.y;
-          const dz = enemy.position.z - pos.z;
+          const dx = enemy.position.x - ctrl.position.x;
+          const dy = enemy.position.y - ctrl.position.y;
+          const dz = enemy.position.z - ctrl.position.z;
           const dist = Math.hypot(dx, dz);
           if (dist < 4.5 && Math.abs(dy) < 3.5) {
             const dot = (dx * pFwdX + dz * pFwdZ) / (dist || 1);
@@ -425,21 +351,23 @@ export function Player({
     }
 
     // Over-the-shoulder third-person follow camera
-    const camDist = isFlying && shift ? 4.6 : 3.7;
+    const yaw = camYawRef.current;
+    const pitch = camPitchRef.current;
+    const camDist = isFlying && step.horizSpeed > 18 ? 4.6 : 3.7;
     const rightX = Math.cos(yaw);
     const rightZ = -Math.sin(yaw);
     const shoulderOffset = 0.58;
 
-    const lookAtY = pos.y + 1.45;
+    const lookAtY = ctrl.position.y + 1.45;
     camTargetRef.current.set(
-      pos.x + rightX * (shoulderOffset * 0.65),
+      ctrl.position.x + rightX * (shoulderOffset * 0.65),
       lookAtY,
-      pos.z + rightZ * (shoulderOffset * 0.65)
+      ctrl.position.z + rightZ * (shoulderOffset * 0.65)
     );
 
     const horizDist = camDist * Math.cos(pitch);
-    const camX = pos.x + Math.sin(yaw) * horizDist + rightX * shoulderOffset;
-    const camZ = pos.z + Math.cos(yaw) * horizDist + rightZ * shoulderOffset;
+    const camX = ctrl.position.x + Math.sin(yaw) * horizDist + rightX * shoulderOffset;
+    const camZ = ctrl.position.z + Math.cos(yaw) * horizDist + rightZ * shoulderOffset;
     let camY = lookAtY + camDist * Math.sin(pitch);
 
     const terrainUnderCam = getTerrainHeight(camX, camZ) + 0.6;
@@ -490,4 +418,4 @@ export function Player({
   );
 }
 
-useGLTF.preload(SOLDIER_URL);
+useGLTF.preload(DEFAULT_CHARACTER_MODEL_URL);

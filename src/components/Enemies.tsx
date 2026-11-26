@@ -14,6 +14,7 @@ export interface EnemyEntity {
   chasing: boolean;
   hitFlash: number;
   yaw: number;
+  attackCooldown: number;
 }
 
 export function createInitialEnemies(): EnemyEntity[] {
@@ -42,6 +43,7 @@ export function createInitialEnemies(): EnemyEntity[] {
       chasing: false,
       hitFlash: 0,
       yaw: 0,
+      attackCooldown: 0,
     };
   });
 }
@@ -50,6 +52,7 @@ interface EnemiesProps {
   enemiesRef: React.MutableRefObject<EnemyEntity[]>;
   playerPosRef: React.MutableRefObject<THREE.Vector3>;
   isInvisible: boolean;
+  onPlayerHit?: () => void;
 }
 
 function EnemyMesh({
@@ -126,7 +129,7 @@ function EnemyMesh({
   );
 }
 
-export function Enemies({ enemiesRef, playerPosRef, isInvisible }: EnemiesProps) {
+export function Enemies({ enemiesRef, playerPosRef, isInvisible, onPlayerHit }: EnemiesProps) {
   const tempVec = useRef(new THREE.Vector3());
 
   useFrame((_, delta) => {
@@ -167,13 +170,20 @@ export function Enemies({ enemiesRef, playerPosRef, isInvisible }: EnemiesProps)
       tempVec.current.set(target.x - enemy.position.x, 0, target.z - enemy.position.z);
       const distToTarget = tempVec.current.length();
 
+      if (enemy.attackCooldown > 0) {
+        enemy.attackCooldown = Math.max(0, enemy.attackCooldown - dt);
+      }
+
       if (enemy.chasing) {
-        if (distToTarget > 2.0) {
+        if (distToTarget > 1.85) {
           tempVec.current.normalize();
           const speed = 5.4;
           enemy.position.x += tempVec.current.x * speed * dt;
           enemy.position.z += tempVec.current.z * speed * dt;
           enemy.yaw = Math.atan2(tempVec.current.x, tempVec.current.z);
+        } else if (enemy.attackCooldown <= 0) {
+          enemy.attackCooldown = 1.4;
+          onPlayerHit?.();
         }
       } else {
         if (distToTarget < 1.2) {
