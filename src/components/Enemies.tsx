@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import { useAnimations, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { ISLAND_RADIUS } from '../types/game';
 import { getGroundHeight, getTerrainHeight } from '../world/terrain';
 import { ENEMY_ATTACK_DAMAGE, ENEMY_MAX_HP } from '../gameplay/combat/HealthSystem';
 
@@ -164,12 +165,23 @@ function EnemyCreature({ enemy }: { enemy: EnemyEntity }) {
 
     g.position.set(enemy.position.x, enemy.position.y, enemy.position.z);
 
-    // Smooth yaw turning
+    // Smooth yaw turning + hit recoil on creatures without a dedicated hit-react clip (e.g. Spider)
     let diff = enemy.yaw - smoothYawRef.current;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
     smoothYawRef.current += diff * Math.min(1, 10 * dt);
     g.rotation.y = smoothYawRef.current;
+    if (modelWrapRef.current) {
+      const recoil =
+        enemy.species === 'spider' && hitAnimTimerRef.current > 0
+          ? -0.34 * Math.sin((hitAnimTimerRef.current / 0.35) * Math.PI)
+          : 0;
+      modelWrapRef.current.rotation.x = THREE.MathUtils.lerp(
+        modelWrapRef.current.rotation.x,
+        recoil,
+        1 - Math.exp(-16 * dt)
+      );
+    }
 
     // Choose clip based on species & state
     let desiredClip = '';
@@ -307,10 +319,17 @@ export function Enemies({
         enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
       }
 
-      // Apply & decay knockback impulse
+      // Apply & decay knockback impulse, clamped within island bounds
       if (Math.abs(enemy.knockbackX) > 0.05 || Math.abs(enemy.knockbackZ) > 0.05) {
         enemy.position.x += enemy.knockbackX * dt;
         enemy.position.z += enemy.knockbackZ * dt;
+        const distFromCenter = Math.hypot(enemy.position.x, enemy.position.z);
+        const maxR = ISLAND_RADIUS - 8;
+        if (distFromCenter > maxR) {
+          const r = maxR / distFromCenter;
+          enemy.position.x *= r;
+          enemy.position.z *= r;
+        }
         const decay = Math.exp(-10 * dt);
         enemy.knockbackX *= decay;
         enemy.knockbackZ *= decay;

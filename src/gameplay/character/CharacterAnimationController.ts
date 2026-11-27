@@ -89,8 +89,21 @@ export class CharacterAnimationController {
     // (or when re-entering the same native one-shot state).
     if (clipChanged || (stateChanged && isOneShot)) {
       const prevAction = this.currentClipName ? actions[this.currentClipName] : null;
-      const blendDuration =
-        state === 'Attack' || state === 'JumpStart' || state === 'HitReaction' ? 0.1 : 0.22;
+      const isFlight =
+        state === 'FlightHover' ||
+        state === 'FlightForward' ||
+        state === 'FlightAscend' ||
+        state === 'FlightDescend' ||
+        state === 'FlightTakeoff' ||
+        state === 'FlightLand';
+      const isFastOneShot =
+        state === 'Attack' ||
+        state === 'Attack1' ||
+        state === 'Attack2' ||
+        state === 'Attack3' ||
+        state === 'JumpStart' ||
+        state === 'HitReaction';
+      const blendDuration = isFastOneShot ? 0.1 : isFlight ? 0.28 : 0.2;
 
       if (prevAction && prevAction !== nextAction) {
         prevAction.fadeOut(blendDuration);
@@ -127,6 +140,8 @@ export class CharacterAnimationController {
     } else if (resolved.clipName === 'Run') {
       const rate = THREE.MathUtils.clamp(horizSpeed / 9.8, 0.72, 1.45);
       nextAction.timeScale = rate;
+    } else if (resolved.clipName === 'StrafeLeft' || resolved.clipName === 'StrafeRight') {
+      nextAction.timeScale = THREE.MathUtils.clamp(horizSpeed / 4.4, 0.65, 1.35);
     } else {
       nextAction.timeScale = this.currentReverse ? -1.0 : 1.0;
     }

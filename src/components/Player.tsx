@@ -92,6 +92,7 @@ export function Player({
   const camPitchRef = useRef(0.14);
   const isDraggingRef = useRef(false);
   const hitEnemiesThisAttackRef = useRef<Set<string>>(new Set());
+  const lastAttackIdRef = useRef<number>(0);
 
   // Reusable camera vectors
   const camTargetRef = useRef(new THREE.Vector3());
@@ -144,7 +145,9 @@ export function Player({
 
     scene.updateMatrixWorld(true);
     let hand: THREE.Object3D | null = null;
-    const feet: THREE.Object3D[] = [];
+    let headBone: THREE.Object3D | null = null;
+    const toeBones: THREE.Object3D[] = [];
+    const ankleBones: THREE.Object3D[] = [];
     scene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         const mesh = obj as THREE.Mesh;
@@ -191,35 +194,60 @@ export function Player({
       if (!hand && /^(RightHand|Hand\.R|Bip001[\s_]+R[\s_]+Hand)(_\d+)?$/i.test(obj.name)) {
         hand = obj;
       }
-      if (/^((Left|Right)(ToeBase|Foot)|Foot\.(L|R)|Bip001[\s_]+(L|R)[\s_]+(Foot|Toe0))(_\d+)?$/i.test(obj.name)) {
-        feet.push(obj);
+      if (!headBone && /^(mixamorig:?Head|Head|Bip001[\s_]+Head)(_\d+)?$/i.test(obj.name)) {
+        headBone = obj;
+      }
+      if (/^((Left|Right)ToeBase|Bip001[\s_]+(L|R)[\s_]+Toe0)(_\d+)?$/i.test(obj.name)) {
+        toeBones.push(obj);
+      } else if (/^((Left|Right)Foot|Foot\.(L|R)|Bip001[\s_]+(L|R)[\s_]+Foot)(_\d+)?$/i.test(obj.name)) {
+        ankleBones.push(obj);
       }
     });
-    footBonesRef.current = feet;
 
-    // Normalize model height to ~1.85 units and ground feet at y=0
-    const box = new THREE.Box3().setFromObject(scene);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const normScale = size.y > 0.01 ? 1.85 / size.y : 1;
-    setModelNormScale(normScale);
-    setModelOffsetY(-box.min.y * normScale);
+    const activeFeet = toeBones.length > 0 ? toeBones : ankleBones;
+    footBonesRef.current = activeFeet;
 
-    if (feet.length > 0) {
-      let minRestFootY = Infinity;
-      for (const f of feet) {
+    // Measure skeleton height in scene-local coordinates (independent of groupRef world Y!)
+    let normScale = 1;
+    let minLocalFootY = 0;
+    if (activeFeet.length > 0 && headBone) {
+      let minY = Infinity;
+      for (const f of activeFeet) {
         f.getWorldPosition(footPosRef.current);
-        if (footPosRef.current.y < minRestFootY) minRestFootY = footPosRef.current.y;
+        scene.worldToLocal(footPosRef.current);
+        if (footPosRef.current.y < minY) minY = footPosRef.current.y;
       }
-      if (minRestFootY < Infinity) {
-        footClearanceRef.current = Math.max(0.03, (minRestFootY - box.min.y) * normScale);
+      const headPos = new THREE.Vector3();
+      (headBone as THREE.Object3D).getWorldPosition(headPos);
+      scene.worldToLocal(headPos);
+      const span = headPos.y - minY;
+      if (span > 0.1) {
+        // Head bone sits ~0.18m below crown of hair, so 1.66m bone span ~= 1.84m total height
+        normScale = 1.66 / span;
+        minLocalFootY = minY;
       }
+    } else {
+      const box = new THREE.Box3().setFromObject(scene);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      normScale = size.y > 0.01 ? 1.85 / size.y : 1;
+      const rootWorld = new THREE.Vector3();
+      scene.getWorldPosition(rootWorld);
+      minLocalFootY = box.min.y - rootWorld.y;
     }
+
+    const clearance = toeBones.length > 0 ? 0.025 : 0.09;
+    footClearanceRef.current = clearance;
+    setModelNormScale(normScale);
+    setModelOffsetY(-minLocalFootY * normScale + clearance);
 
     if (hand) {
       const worldScale = new THREE.Vector3();
       (hand as THREE.Object3D).getWorldScale(worldScale);
-      setHandInvScale(1 / ((worldScale.x || 1) * normScale));
+      const modelWorldScale = new THREE.Vector3();
+      scene.getWorldScale(modelWorldScale);
+      const relScale = (worldScale.x || 1) / (modelWorldScale.x || 1);
+      setHandInvScale(1 / ((relScale || 1) * normScale));
       setRightHandBone(hand);
     }
   }, [scene, generatedClips, modelUrl]);
@@ -466,7 +494,7 @@ export function Player({
           modelRef.current.position.y += footClearanceRef.current - minFootY;
         }
       }
-    } else if (modelRef.current && !step.grounded) {
+    } else if (modelRef.current && (!step.grounded || step.state === 'Death')) {
       modelRef.current.position.y = THREE.MathUtils.lerp(
         modelRef.current.position.y,
         modelOffsetY,
@@ -474,16 +502,22 @@ export function Player({
       );
     }
 
-    // Subtle posture layer for flight tilt, landing squash, hit stagger, & attack anticipation/recovery
+    // Subtle posture layer for flight tilt, landing squash, hit stagger, & 3-hit attack body motion
     if (tiltGroupRef.current) {
       let targetTiltX = step.flightTiltX;
       let targetTwistY = 0;
       let targetRollZ = step.flightRollZ;
 
-      if (step.state === 'Attack') {
+      if (step.comboStep > 0) {
         const p = step.attackProgress;
-        targetTwistY = p < 0.24 ? -0.45 * (p / 0.24) : -0.45 + ((p - 0.24) / 0.76) * 1.15;
-        targetTiltX += 0.14 * Math.sin(p * Math.PI);
+        if (step.comboStep === 2) {
+          targetTwistY = p < 0.22 ? 0.45 * (p / 0.22) : 0.45 - ((p - 0.22) / 0.78) * 1.15;
+        } else if (step.comboStep === 3) {
+          targetTiltX += p < 0.3 ? -0.16 * (p / 0.3) : 0.28 * Math.sin(((p - 0.3) / 0.7) * Math.PI);
+        } else {
+          targetTwistY = p < 0.24 ? -0.45 * (p / 0.24) : -0.45 + ((p - 0.24) / 0.76) * 1.15;
+          targetTiltX += 0.14 * Math.sin(p * Math.PI);
+        }
       } else if (step.state === 'HitReaction') {
         targetTiltX = -0.28 * Math.sin(step.hitReactionProgress * Math.PI);
       } else if (step.state === 'Land') {
@@ -508,20 +542,48 @@ export function Player({
       );
     }
 
-    // Weapon swing & hit detection synchronized with active attack frames
-    if (step.state === 'Attack') {
+    // Reset hit set whenever a new attack swing (combo step 1, 2, or 3) begins
+    if (step.attackId !== lastAttackIdRef.current) {
+      lastAttackIdRef.current = step.attackId;
+      hitEnemiesThisAttackRef.current.clear();
+    }
+
+    // Weapon swing & hit detection synchronized with active attack frames across 3-hit combo
+    if (step.comboStep > 0) {
       const p = step.attackProgress;
       if (weaponGroupRef.current) {
-        weaponGroupRef.current.rotation.x = Math.PI / 2 - 0.9 + p * 1.9;
+        if (step.comboStep === 2) {
+          weaponGroupRef.current.rotation.x = Math.PI / 2 + 0.8 - p * 1.8;
+        } else if (step.comboStep === 3) {
+          weaponGroupRef.current.rotation.x = Math.PI / 2 - 1.2 + p * 2.4;
+        } else {
+          weaponGroupRef.current.rotation.x = Math.PI / 2 - 0.9 + p * 1.9;
+        }
       }
       if (slashTrailRef.current) {
         slashTrailRef.current.visible = step.isAttackActiveHitWindow;
-        slashTrailRef.current.rotation.z = -1.1 + p * 2.2;
+        const trailMat = slashTrailRef.current.material as THREE.MeshBasicMaterial;
+        if (step.comboStep === 2) {
+          slashTrailRef.current.rotation.set(Math.PI / 2 - 0.25, 0.2, 1.1 - p * 2.2);
+          slashTrailRef.current.scale.setScalar(1.05);
+          trailMat.color.set('#a78bfa');
+        } else if (step.comboStep === 3) {
+          slashTrailRef.current.rotation.set(0.25, Math.PI / 2, -1.2 + p * 2.4);
+          slashTrailRef.current.scale.setScalar(1.3);
+          trailMat.color.set('#fde047');
+        } else {
+          slashTrailRef.current.rotation.set(Math.PI / 2 + 0.2, -0.2, -1.1 + p * 2.2);
+          slashTrailRef.current.scale.setScalar(1.0);
+          trailMat.color.set('#67e8f9');
+        }
       }
 
       if (step.isAttackActiveHitWindow) {
         const pFwdX = Math.sin(ctrl.yaw);
         const pFwdZ = Math.cos(ctrl.yaw);
+        const damage = step.comboStep === 3 ? PLAYER_ATTACK_DAMAGE + 10 : PLAYER_ATTACK_DAMAGE;
+        const knockbackForce = step.comboStep === 3 ? 20 : 13;
+        const reach = step.comboStep === 3 ? 4.9 : 4.4;
 
         for (const enemy of enemiesRef.current) {
           if (!enemy.alive || hitEnemiesThisAttackRef.current.has(enemy.id)) continue;
@@ -529,15 +591,15 @@ export function Player({
           const dy = enemy.position.y - ctrl.position.y;
           const dz = enemy.position.z - ctrl.position.z;
           const dist = Math.hypot(dx, dz);
-          if (dist < 4.5 && Math.abs(dy) < 3.5) {
+          if (dist < reach && Math.abs(dy) < 3.5) {
             const dot = (dx * pFwdX + dz * pFwdZ) / (dist || 1);
-            if (dist < 2.2 || dot > 0.15) {
+            if (dist < 2.2 || dot > 0.1) {
               hitEnemiesThisAttackRef.current.add(enemy.id);
               enemy.hitFlash = 0.22;
-              enemy.hp = Math.max(0, enemy.hp - PLAYER_ATTACK_DAMAGE);
+              enemy.hp = Math.max(0, enemy.hp - damage);
               const invD = 1 / (dist || 1);
-              enemy.knockbackX = dx * invD * 14;
-              enemy.knockbackZ = dz * invD * 14;
+              enemy.knockbackX = dx * invD * knockbackForce;
+              enemy.knockbackZ = dz * invD * knockbackForce;
               if (enemy.hp <= 0) {
                 enemy.alive = false;
                 enemy.chasing = false;
