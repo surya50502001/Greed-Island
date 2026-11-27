@@ -14,6 +14,7 @@ import {
 } from './components/Player';
 import { CombatVFX, CombatVFXHandle } from './components/CombatVFX';
 import { Grimoire } from './components/Grimoire';
+import { GrimoireOverlay } from './components/GrimoireOverlay';
 import { ActiveDamageNumber, HUD } from './components/HUD';
 import { MobileControls } from './components/MobileControls';
 import {
@@ -259,14 +260,19 @@ export function App() {
         </Suspense>
         <Grimoire
           isOpen={isGrimoireOpen && !isDead}
+        />
+      </Canvas>
+
+      {isGrimoireOpen && !isDead && (
+        <GrimoireOverlay
+          isOpen={isGrimoireOpen && !isDead}
           isFlying={isFlying}
           hasWeapon={hasWeapon}
           isInvisible={isInvisible}
           onActivateCard={handleActivateCard}
           onClose={() => setIsGrimoireOpen(false)}
         />
-      </Canvas>
-
+      )}
       <HUD
         hp={playerHp}
         maxHp={PLAYER_MAX_HP}
