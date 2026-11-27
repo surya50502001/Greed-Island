@@ -627,7 +627,7 @@ export function Player({
       } else if (step.state === 'Land') {
         targetTiltX = 0.14;
       } else if (step.state === 'Sprint') {
-        targetTiltX = 0.08;
+        targetTiltX = 0.03;
       }
 
       const postureLerp = 1 - Math.exp(-14 * dt);
