@@ -139,7 +139,7 @@ export class CharacterAnimationController {
       const rate = THREE.MathUtils.clamp(horizSpeed / 4.6, 0.55, 1.4);
       nextAction.timeScale = this.currentReverse ? -rate : rate;
     } else if (resolved.clipName === 'Run') {
-      const rate = THREE.MathUtils.clamp(horizSpeed / 11.4, 0.78, 1.38);
+      const rate = THREE.MathUtils.clamp(horizSpeed / 12.2, 0.85, 1.35);
       nextAction.timeScale = rate;
     } else if (resolved.clipName === 'StrafeLeft' || resolved.clipName === 'StrafeRight') {
       nextAction.timeScale = THREE.MathUtils.clamp(horizSpeed / 4.4, 0.65, 1.35);
