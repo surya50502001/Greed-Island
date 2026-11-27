@@ -148,19 +148,44 @@ export function Player({
     scene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         const mesh = obj as THREE.Mesh;
+        // Hide redundant lower-detail hair LODs that z-fight/blur bangs over the face
+        if (/NLOD[123]/i.test(mesh.name)) {
+          mesh.visible = false;
+          return;
+        }
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        for (const mat of materials) {
-          if (mat && (mat as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
-            const std = mat as THREE.MeshStandardMaterial;
-            std.envMapIntensity = 1.35;
-            if (std.aoMap) {
-              std.aoMapIntensity = 0.45;
+
+        const isEye = /Eye/i.test(mesh.name);
+        const isArray = Array.isArray(mesh.material);
+        const rawMats: THREE.Material[] = isArray
+          ? (mesh.material as THREE.Material[])
+          : [mesh.material as THREE.Material];
+        const tunedMats = rawMats.map((mat) => {
+          if (!mat) return mat;
+          const cloned = mat.clone();
+          if ((cloned as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+            const std = cloned as THREE.MeshStandardMaterial;
+            const isFace = /Face/i.test(std.name);
+            if (isEye) {
+              std.emissive = new THREE.Color('#38bdf8');
+              std.emissiveIntensity = 0.65;
+              std.roughness = 0.25;
+              std.envMapIntensity = 0.4;
+            } else if (isFace) {
+              std.envMapIntensity = 0.24;
+              std.roughness = 0.92;
+              if (std.aoMap) std.aoMapIntensity = 0.8;
+            } else {
+              std.envMapIntensity = 0.45;
+              std.roughness = Math.max(std.roughness ?? 0.72, 0.72);
+              if (std.aoMap) std.aoMapIntensity = 0.6;
             }
             std.needsUpdate = true;
           }
-        }
+          return cloned;
+        });
+        mesh.material = isArray ? tunedMats : tunedMats[0];
       }
       if (!hand && /^(RightHand|Hand\.R|Bip001[\s_]+R[\s_]+Hand)(_\d+)?$/i.test(obj.name)) {
         hand = obj;

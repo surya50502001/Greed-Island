@@ -121,7 +121,7 @@ export function App() {
         gl={{
           antialias: true,
           toneMapping: THREE.ACESFilmicToneMapping,
-          toneMappingExposure: 1.05,
+          toneMappingExposure: 0.95,
         }}
         camera={{ fov: 60, near: 0.1, far: 600, position: [0, 6, 10] }}
         onContextMenu={(e) => e.preventDefault()}
@@ -168,12 +168,12 @@ export function App() {
           />
         </Environment>
 
-        <ambientLight intensity={0.7} />
-        <hemisphereLight args={['#d8f3ff', '#6b8e63', 0.9]} />
+        <ambientLight intensity={0.46} />
+        <hemisphereLight args={['#d8f3ff', '#6b8e63', 0.68]} />
         <directionalLight
           castShadow
           position={[70, 95, 40]}
-          intensity={1.85}
+          intensity={1.55}
           shadow-bias={-0.0003}
           shadow-normalBias={0.03}
           shadow-mapSize-width={2048}

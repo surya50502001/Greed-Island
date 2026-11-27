@@ -41,7 +41,7 @@ export const HUD: React.FC<HUDProps> = ({
         zIndex: 10,
       }}
     >
-      {/* Top bar: Player HP + Active Ability Pills */}
+      {/* Top bar: Player HP (left, away from top-right touch toggle) + Active Ability Pills */}
       <div
         style={{
           width: '100%',
@@ -54,7 +54,8 @@ export const HUD: React.FC<HUDProps> = ({
         {/* Player Health Bar */}
         <div
           style={{
-            width: '230px',
+            alignSelf: 'flex-start',
+            width: '176px',
             padding: '7px 12px',
             borderRadius: '12px',
             background: 'rgba(15, 23, 42, 0.78)',
