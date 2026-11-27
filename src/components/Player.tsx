@@ -609,32 +609,19 @@ export function Player({
       );
     }
 
-    // Subtle posture layer for flight tilt, landing squash, hit stagger, & 4-hit attack body motion
+    // Subtle posture layer for flight tilt, landing squash, hit stagger, & Attack 3 world-yaw spin
+    // (Attack 1, 2, 4 body mechanics are driven 100% by the skeletal hierarchy to avoid rigid puppet twisting)
     if (tiltGroupRef.current) {
       let targetTiltX = step.flightTiltX;
       let targetTwistY = 0;
       let targetRollZ = step.flightRollZ;
       let instantSpinY: number | null = null;
 
-      if (step.comboStep > 0) {
+      if (step.comboStep === 3) {
         const p = step.attackProgress;
-        if (step.comboStep === 1) {
-          targetTwistY = p < 0.24 ? -0.42 * (p / 0.24) : -0.42 + ((p - 0.24) / 0.76) * 1.05;
-          targetTiltX += 0.14 * Math.sin(p * Math.PI);
-        } else if (step.comboStep === 2) {
-          targetTwistY = p < 0.22 ? 0.45 * (p / 0.22) : 0.45 - ((p - 0.22) / 0.78) * 1.12;
-          targetTiltX += 0.08 * Math.sin(p * Math.PI);
-        } else if (step.comboStep === 3) {
-          // True 360° anime whirlwind spin synchronized with Spinning Crescent
-          const spinP = Math.max(0, Math.min(1, (p - 0.08) / 0.74));
-          const eased = 1 - Math.pow(1 - spinP, 2.2);
-          instantSpinY = eased * Math.PI * 2;
-          targetTiltX += 0.16 * Math.sin(p * Math.PI);
-        } else {
-          // Attack 4: Arcane Breaker overhead arch -> heavy downward cleave
-          targetTiltX += p < 0.34 ? -0.18 * (p / 0.34) : 0.32 * Math.sin(((p - 0.34) / 0.66) * Math.PI);
-          targetTwistY = p < 0.34 ? -0.1 : 0.22;
-        }
+        const spinP = Math.max(0, Math.min(1, (p - 0.16) / 0.62));
+        const eased = spinP < 0.5 ? 2 * spinP * spinP : 1 - Math.pow(-2 * spinP + 2, 2) / 2;
+        instantSpinY = eased * Math.PI * 2;
       } else if (step.state === 'HitReaction') {
         targetTiltX = -0.28 * Math.sin(step.hitReactionProgress * Math.PI);
       } else if (step.state === 'Land') {
@@ -669,22 +656,20 @@ export function Player({
     }
 
     // Weapon swing, crescent slash VFX, & swept-blade hit detection across 4-hit combo
+    // Keep weaponGroupRef rigidly locked to the palm; wrist motion comes from Hand.R bone.
+    if (weaponGroupRef.current) {
+      const isBipedHand = rightHandBone ? /Bip001/i.test(rightHandBone.name) : false;
+      if (isBipedHand) {
+        weaponGroupRef.current.rotation.set(0, 0, Math.PI / 2 + 0.16);
+      } else {
+        weaponGroupRef.current.rotation.set(Math.PI / 2, 0, 0);
+      }
+    }
+
     if (step.comboStep > 0) {
       const activeStep = step.comboStep as ActiveComboStep;
       const spec = COMBO_SPECS[activeStep];
       const p = step.attackProgress;
-
-      if (weaponGroupRef.current) {
-        if (activeStep === 1) {
-          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 - 0.16 + p * 0.36;
-        } else if (activeStep === 2) {
-          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 + 0.18 - p * 0.38;
-        } else if (activeStep === 3) {
-          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.22;
-        } else {
-          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 - 0.28 + p * 0.62;
-        }
-      }
 
       // Trigger Arcane Breaker ground shockwave at impact frame
       if (activeStep === 4 && p >= 0.42 && !finisherShockwaveFiredRef.current) {
@@ -863,14 +848,6 @@ export function Player({
       hasPrevBladeRef.current = true;
     } else {
       hasPrevBladeRef.current = false;
-      if (weaponGroupRef.current) {
-        const isBipedHand = rightHandBone ? /Bip001/i.test(rightHandBone.name) : false;
-        if (isBipedHand) {
-          weaponGroupRef.current.rotation.set(0, 0, Math.PI / 2 + 0.16);
-        } else {
-          weaponGroupRef.current.rotation.set(Math.PI / 2, 0, 0);
-        }
-      }
       if (slashTrailRef.current) slashTrailRef.current.visible = false;
       if (slashAuraRef.current) slashAuraRef.current.visible = false;
     }
