@@ -12,7 +12,11 @@ import {
   getMissingStatesForClips,
 } from '../gameplay/character/CharacterStates';
 import { EnergySword } from './EnergySword';
-import { CombatVFXHandle, createCrescentArcGeometry } from './CombatVFX';
+import {
+  CombatVFXHandle,
+  createAnimeSlashMaterial,
+  createCrescentArcGeometry,
+} from './CombatVFX';
 
 export interface FloatingDamageEvent {
   x: number;
@@ -49,6 +53,7 @@ interface PlayerProps {
   touchBridgeRef?: React.MutableRefObject<PlayerTouchBridge | null>;
   vfxRef?: React.RefObject<CombatVFXHandle | null>;
   onDamageNumber?: (ev: FloatingDamageEvent) => void;
+  onComboHit?: (comboStep: number, attackName: string) => void;
   onPointerLockChange: (locked: boolean) => void;
 }
 
@@ -81,6 +86,7 @@ export function Player({
   touchBridgeRef,
   vfxRef,
   onDamageNumber,
+  onComboHit,
   onPointerLockChange,
 }: PlayerProps) {
   const { camera, gl } = useThree();
@@ -137,10 +143,12 @@ export function Player({
   const impactPointRef = useRef(new THREE.Vector3());
   const projVecRef = useRef(new THREE.Vector3());
 
-  const { crescentGeo, spinCrescentGeo } = useMemo(() => {
+  const { crescentGeo, spinCrescentGeo, slashCoreMat, slashAuraMat } = useMemo(() => {
     return {
-      crescentGeo: createCrescentArcGeometry(1.05, 0.72, Math.PI * 0.92, 36),
-      spinCrescentGeo: createCrescentArcGeometry(1.12, 0.9, Math.PI * 1.55, 44),
+      crescentGeo: createCrescentArcGeometry(1.05, 0.78, Math.PI * 0.94, 36),
+      spinCrescentGeo: createCrescentArcGeometry(1.12, 0.94, Math.PI * 1.58, 44),
+      slashCoreMat: createAnimeSlashMaterial(),
+      slashAuraMat: createAnimeSlashMaterial(),
     };
   }, []);
 
@@ -148,8 +156,10 @@ export function Player({
     return () => {
       crescentGeo.dispose();
       spinCrescentGeo.dispose();
+      slashCoreMat.dispose();
+      slashAuraMat.dispose();
     };
-  }, [crescentGeo, spinCrescentGeo]);
+  }, [crescentGeo, spinCrescentGeo, slashCoreMat, slashAuraMat]);
 
   // Reusable camera vectors
   const camTargetRef = useRef(new THREE.Vector3());
@@ -630,7 +640,7 @@ export function Player({
       } else if (step.state === 'Land') {
         targetTiltX = 0.14;
       } else if (step.state === 'Sprint') {
-        targetTiltX = 0.14;
+        targetTiltX = 0.04;
       }
 
       const postureLerp = 1 - Math.exp(-14 * dt);
@@ -721,12 +731,15 @@ export function Player({
           slashAuraRef.current.geometry = targetGeo;
         }
 
-        const coreMat = slashTrailRef.current.material as THREE.MeshBasicMaterial;
-        const auraMat = slashAuraRef.current.material as THREE.MeshBasicMaterial;
-        coreMat.color.set(trailColor);
-        coreMat.opacity = Math.max(0.15, trailFade * 0.92);
-        auraMat.color.set(auraColor);
-        auraMat.opacity = Math.max(0.08, trailFade * 0.45);
+        slashCoreMat.uniforms.uColorCore.value.set(activeStep === 4 ? '#fef08a' : '#ffffff');
+        slashCoreMat.uniforms.uColorEdge.value.set(trailColor);
+        slashCoreMat.uniforms.uOpacity.value = Math.max(0.2, trailFade * 1.05);
+        slashCoreMat.uniforms.uTime.value = clock.getElapsedTime();
+
+        slashAuraMat.uniforms.uColorCore.value.set(trailColor);
+        slashAuraMat.uniforms.uColorEdge.value.set(auraColor);
+        slashAuraMat.uniforms.uOpacity.value = Math.max(0.1, trailFade * 0.55);
+        slashAuraMat.uniforms.uTime.value = clock.getElapsedTime();
 
         if (activeStep === 1) {
           slashTrailRef.current.position.set(0.06, 1.18, 0.72);
@@ -826,6 +839,7 @@ export function Player({
               trailColor,
               isFinisher
             );
+            onComboHit?.(activeStep, spec.name);
 
             if (onDamageNumber) {
               projVecRef.current.set(enemy.position.x, enemy.position.y + 1.5, enemy.position.z);
@@ -925,39 +939,23 @@ export function Player({
 
       {rightHandBone && weaponElement && createPortal(weaponElement, rightHandBone)}
 
-      {/* Anime Crescent Melee Slash Trail (core + additive energy wake) */}
+      {/* Anime Crescent Melee Slash Trail (GLSL core + additive energy wake) */}
       <mesh
         ref={slashTrailRef}
         geometry={crescentGeo}
+        material={slashCoreMat}
         visible={false}
         position={[0, 1.25, 0.55]}
         rotation={[Math.PI / 2, 0, 0]}
-      >
-        <meshBasicMaterial
-          color="#67e8f9"
-          transparent
-          opacity={0.85}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
+      />
       <mesh
         ref={slashAuraRef}
         geometry={crescentGeo}
+        material={slashAuraMat}
         visible={false}
         position={[0, 1.25, 0.55]}
         rotation={[Math.PI / 2, 0, 0]}
-      >
-        <meshBasicMaterial
-          color="#0ea5e9"
-          transparent
-          opacity={0.4}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
+      />
 
       {/* Flight Wind / Aura Effect (framed low around feet/lower coat so body & face stay clear) */}
       <group ref={auraGroupRef} visible={false} position={[0, 0.35, 0]}>

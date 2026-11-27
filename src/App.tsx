@@ -41,6 +41,12 @@ export function App() {
   const lastDamageTimeRef = useRef<number>(0);
   const dmgIdRef = useRef<number>(1);
   const [damageNumbers, setDamageNumbers] = useState<ActiveDamageNumber[]>([]);
+  const [comboState, setComboState] = useState<{
+    count: number;
+    step: number;
+    attackName: string;
+    timer: number;
+  }>({ count: 0, step: 0, attackName: '', timer: 0 });
 
   const handleDamageNumber = useCallback((ev: FloatingDamageEvent) => {
     const id = dmgIdRef.current++;
@@ -49,6 +55,27 @@ export function App() {
       setDamageNumbers((prev) => prev.filter((item) => item.id !== id));
     }, 680);
   }, []);
+
+  const handleComboHit = useCallback((comboStep: number, attackName: string) => {
+    setComboState((prev) => ({
+      count: prev.count + 1,
+      step: comboStep,
+      attackName,
+      timer: 2.6,
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (comboState.timer <= 0) return;
+    const interval = window.setInterval(() => {
+      setComboState((prev) => {
+        const next = prev.timer - 0.1;
+        if (next <= 0) return { count: 0, step: 0, attackName: '', timer: 0 };
+        return { ...prev, timer: next };
+      });
+    }, 100);
+    return () => window.clearInterval(interval);
+  }, [comboState.timer > 0]);
 
   const isDead = playerHp <= 0;
 
@@ -226,6 +253,7 @@ export function App() {
             touchBridgeRef={touchBridgeRef}
             vfxRef={vfxRef}
             onDamageNumber={handleDamageNumber}
+            onComboHit={handleComboHit}
             onPointerLockChange={setPointerLocked}
           />
         </Suspense>
@@ -249,6 +277,10 @@ export function App() {
         isGrimoireOpen={isGrimoireOpen}
         hideKeyboardHints={isTouchVisible}
         damageNumbers={damageNumbers}
+        comboCount={comboState.count}
+        comboStep={comboState.step}
+        comboAttackName={comboState.attackName}
+        comboTimer={comboState.timer}
         onRevive={handleRevive}
       />
       <MobileControls

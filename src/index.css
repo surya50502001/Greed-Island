@@ -39,3 +39,16 @@ canvas {
 .floating-dmg {
   animation: floatDamagePop 0.65s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
+
+@keyframes comboHitPop {
+  0% {
+    transform: skewX(-10deg) scale(1.26);
+  }
+  100% {
+    transform: skewX(-10deg) scale(1);
+  }
+}
+
+.combo-callout {
+  animation: comboHitPop 0.18s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}

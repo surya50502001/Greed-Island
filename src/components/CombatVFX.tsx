@@ -45,7 +45,7 @@ const BURST_POOL_SIZE = 6;
 const SHOCKWAVE_POOL_SIZE = 2;
 
 /**
- * Builds a tapered anime crescent blade-arc geometry with sharp pointed tips.
+ * Builds a tapered anime crescent blade-arc geometry with UVs (u = arc 0..1, v = inner 0..outer 1).
  */
 export function createCrescentArcGeometry(
   innerRadius: number,
@@ -54,14 +54,15 @@ export function createCrescentArcGeometry(
   segments = 36
 ): THREE.BufferGeometry {
   const positions: number[] = [];
+  const uvs: number[] = [];
   const indices: number[] = [];
   const startAngle = -arcAngle * 0.5;
 
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
     const angle = startAngle + t * arcAngle;
-    const taper = Math.pow(Math.sin(t * Math.PI), 0.78);
-    const rIn = innerRadius + (1 - taper) * maxWidth * 0.25;
+    const taper = Math.pow(Math.sin(t * Math.PI), 0.75);
+    const rIn = innerRadius + (1 - taper) * maxWidth * 0.28;
     const rOut = innerRadius + taper * maxWidth;
 
     const cos = Math.cos(angle);
@@ -69,6 +70,8 @@ export function createCrescentArcGeometry(
 
     positions.push(cos * rIn, sin * rIn, 0);
     positions.push(cos * rOut, sin * rOut, 0);
+    uvs.push(t, 0);
+    uvs.push(t, 1);
 
     if (i < segments) {
       const base = i * 2;
@@ -79,9 +82,54 @@ export function createCrescentArcGeometry(
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geo.setIndex(indices);
   geo.computeVertexNormals();
   return geo;
+}
+
+/**
+ * Custom GLSL anime blade-slash shader with white-hot cutting edge,
+ * gradient energy tail, and sweeping speed streaks.
+ */
+export function createAnimeSlashMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uColorCore: { value: new THREE.Color('#ffffff') },
+      uColorEdge: { value: new THREE.Color('#38bdf8') },
+      uOpacity: { value: 0.9 },
+      uTime: { value: 0 },
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColorCore;
+      uniform vec3 uColorEdge;
+      uniform float uOpacity;
+      uniform float uTime;
+      varying vec2 vUv;
+
+      void main() {
+        float arcMask = pow(sin(vUv.x * 3.14159265), 0.65);
+        float edgeGlow = smoothstep(0.55, 0.96, vUv.y);
+        float innerFade = smoothstep(0.0, 0.35, vUv.y);
+        float outerSoft = 1.0 - smoothstep(0.94, 1.0, vUv.y);
+        float streaks = 0.72 + 0.28 * sin(vUv.y * 24.0 - vUv.x * 10.0 + uTime * 22.0);
+        float alpha = arcMask * innerFade * outerSoft * streaks * uOpacity;
+        vec3 col = mix(uColorEdge, uColorCore, pow(edgeGlow, 1.4));
+        gl_FragColor = vec4(col * 1.35, alpha);
+      }
+    `,
+  });
 }
 
 export const CombatVFX = forwardRef<CombatVFXHandle>((_, ref) => {

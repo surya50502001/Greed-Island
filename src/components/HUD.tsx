@@ -16,6 +16,10 @@ interface HUDProps {
   isGrimoireOpen: boolean;
   hideKeyboardHints?: boolean;
   damageNumbers?: ActiveDamageNumber[];
+  comboCount?: number;
+  comboStep?: number;
+  comboAttackName?: string;
+  comboTimer?: number;
   onRevive: () => void;
 }
 
@@ -29,6 +33,10 @@ export const HUD: React.FC<HUDProps> = ({
   isGrimoireOpen,
   hideKeyboardHints = false,
   damageNumbers = [],
+  comboCount = 0,
+  comboStep = 0,
+  comboAttackName = '',
+  comboTimer = 0,
   onRevive,
 }) => {
   const isInvisible = invisTimer > 0;
@@ -179,6 +187,106 @@ export const HUD: React.FC<HUDProps> = ({
         </div>
       </div>
 
+      {/* Anime Combo Counter & Sword Art Callout */}
+      {comboCount > 0 && !isDead && (
+        <div
+          key={comboCount}
+          className="combo-callout"
+          style={{
+            position: 'fixed',
+            right: '28px',
+            top: '36%',
+            pointerEvents: 'none',
+            padding: '10px 18px',
+            borderRadius: '8px',
+            background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.88), rgba(30, 41, 59, 0.78))',
+            borderLeft: `4px solid ${
+              comboStep === 4
+                ? '#f97316'
+                : comboStep === 3
+                  ? '#fde047'
+                  : comboStep === 2
+                    ? '#c084fc'
+                    : '#38bdf8'
+            }`,
+            boxShadow: `0 8px 28px rgba(0, 0, 0, 0.45), 0 0 18px ${
+              comboStep === 4 ? 'rgba(249, 115, 22, 0.35)' : 'rgba(56, 189, 248, 0.2)'
+            }`,
+            backdropFilter: 'blur(10px)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: '4px',
+            zIndex: 20,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+            <span
+              style={{
+                fontSize: '30px',
+                fontWeight: 900,
+                fontStyle: 'italic',
+                lineHeight: 1,
+                color:
+                  comboStep === 4
+                    ? '#fde047'
+                    : comboStep === 3
+                      ? '#fef08a'
+                      : comboStep === 2
+                        ? '#e9d5ff'
+                        : '#7dd3fc',
+                textShadow: '0 2px 10px rgba(0,0,0,0.8)',
+              }}
+            >
+              {comboCount}
+            </span>
+            <span
+              style={{
+                fontSize: '11px',
+                fontWeight: 800,
+                letterSpacing: '0.14em',
+                color: '#cbd5e1',
+              }}
+            >
+              HIT{comboCount > 1 ? 'S' : ''}
+            </span>
+          </div>
+          <div
+            style={{
+              fontSize: '11px',
+              fontWeight: 800,
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+              color: '#f8fafc',
+            }}
+          >
+            {comboAttackName}
+          </div>
+          <div
+            style={{
+              width: '120px',
+              height: '3px',
+              borderRadius: '999px',
+              background: 'rgba(255, 255, 255, 0.14)',
+              overflow: 'hidden',
+              marginTop: '2px',
+            }}
+          >
+            <div
+              style={{
+                width: `${Math.max(0, Math.min(100, (comboTimer / 2.6) * 100))}%`,
+                height: '100%',
+                background:
+                  comboStep === 4
+                    ? 'linear-gradient(90deg, #f97316, #fde047)'
+                    : 'linear-gradient(90deg, #38bdf8, #c084fc)',
+                transition: 'width 0.1s linear',
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Floating Anime Damage Numbers */}
       {damageNumbers.map((dn) => (
         <div
@@ -190,22 +298,24 @@ export const HUD: React.FC<HUDProps> = ({
             top: `${dn.y}%`,
             pointerEvents: 'none',
             fontWeight: 900,
-            fontSize: dn.isFinisher ? '26px' : dn.comboStep === 3 ? '21px' : '18px',
+            fontStyle: 'italic',
+            fontSize: dn.isFinisher ? '28px' : dn.comboStep === 3 ? '22px' : '19px',
             color: dn.isFinisher
-              ? '#fde047'
+              ? '#fef08a'
               : dn.comboStep === 3
                 ? '#facc15'
                 : dn.comboStep === 2
-                  ? '#d8b4fe'
-                  : '#67e8f9',
+                  ? '#e9d5ff'
+                  : '#a5f3fc',
+            WebkitTextStroke: dn.isFinisher ? '1px rgba(154, 52, 18, 0.95)' : '0.8px rgba(15, 23, 42, 0.9)',
             textShadow: dn.isFinisher
-              ? '0 0 12px rgba(249, 115, 22, 0.95), 0 2px 4px rgba(0,0,0,0.9)'
-              : '0 2px 6px rgba(0, 0, 0, 0.9)',
-            letterSpacing: '0.02em',
+              ? '0 0 16px rgba(249, 115, 22, 0.95), 0 3px 6px rgba(0,0,0,0.95)'
+              : '0 0 10px rgba(56, 189, 248, 0.55), 0 2px 5px rgba(0, 0, 0, 0.95)',
+            letterSpacing: '0.03em',
             zIndex: 25,
           }}
         >
-          {dn.isFinisher ? `${dn.amount}!` : dn.amount}
+          {dn.isFinisher ? `${dn.amount} BREAKER!` : dn.amount}
         </div>
       ))}
 
