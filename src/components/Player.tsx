@@ -12,6 +12,7 @@ import {
   getMissingStatesForClips,
 } from '../gameplay/character/CharacterStates';
 import { PLAYER_ATTACK_DAMAGE } from '../gameplay/combat/HealthSystem';
+import { EnergySword } from './EnergySword';
 
 export interface PlayerTouchBridge {
   setMove: (x: number, y: number) => void;
@@ -82,6 +83,7 @@ export function Player({
   const footBonesRef = useRef<THREE.Object3D[]>([]);
   const footPosRef = useRef(new THREE.Vector3());
   const footClearanceRef = useRef<number>(0.06);
+  const rightFingersRef = useRef<Array<{ bone: THREE.Object3D; restQuat: THREE.Quaternion; isThumb: boolean }>>([]);
 
   const [rightHandBone, setRightHandBone] = useState<THREE.Object3D | null>(null);
   const [handInvScale, setHandInvScale] = useState<number>(1);
@@ -249,6 +251,20 @@ export function Player({
       const relScale = (worldScale.x || 1) / (modelWorldScale.x || 1);
       setHandInvScale(1 / ((relScale || 1) * normScale));
       setRightHandBone(hand);
+
+      // Collect right-hand finger bones for natural weapon grip curling
+      const fingers: Array<{ bone: THREE.Object3D; restQuat: THREE.Quaternion; isThumb: boolean }> = [];
+      (hand as THREE.Object3D).traverse((child) => {
+        if (child === hand) return;
+        if (/R[\s_]*Finger\d+/i.test(child.name) && !/_end_/i.test(child.name)) {
+          fingers.push({
+            bone: child,
+            restQuat: child.quaternion.clone(),
+            isThumb: /Finger0/i.test(child.name),
+          });
+        }
+      });
+      rightFingersRef.current = fingers;
     }
   }, [scene, generatedClips, modelUrl]);
 
@@ -425,33 +441,25 @@ export function Player({
 
   const weaponElement = useMemo(() => {
     if (!hasWeapon) return null;
+    // Bip001 R Hand: +Y points toward fingertips, -Z is palm side, -X is thumb side (forward when arm hangs).
+    // Align grip inside palm (y=0.068, z=-0.022) with blade extending out thumb side (-X, tilted slightly forward).
+    const isBipedHand = rightHandBone ? /Bip001/i.test(rightHandBone.name) : false;
+    const pos: [number, number, number] = isBipedHand
+      ? [0.004 * handInvScale, 0.068 * handInvScale, -0.022 * handInvScale]
+      : [0, 0.08 * handInvScale, 0.04 * handInvScale];
+    const rot: [number, number, number] = isBipedHand
+      ? [0, 0, Math.PI / 2 + 0.16]
+      : [Math.PI / 2, 0, 0];
+
     return (
-      <group
+      <EnergySword
         ref={weaponGroupRef}
         scale={handInvScale}
-        position={[0, 0.08 * handInvScale, 0.04 * handInvScale]}
-        rotation={[Math.PI / 2, 0, 0]}
-      >
-        <mesh>
-          <cylinderGeometry args={[0.035, 0.035, 0.28, 8]} />
-          <meshStandardMaterial color="#1f2937" metalness={0.5} roughness={0.4} />
-        </mesh>
-        <mesh position={[0, 0.14, 0]}>
-          <boxGeometry args={[0.28, 0.06, 0.09]} />
-          <meshStandardMaterial color="#fbbf24" metalness={0.7} roughness={0.25} />
-        </mesh>
-        <mesh position={[0, 0.78, 0]}>
-          <boxGeometry args={[0.085, 1.24, 0.03]} />
-          <meshStandardMaterial
-            color="#67e8f9"
-            emissive="#06b6d4"
-            emissiveIntensity={2.2}
-            roughness={0.1}
-          />
-        </mesh>
-      </group>
+        position={pos}
+        rotation={rot}
+      />
     );
-  }, [hasWeapon, handInvScale]);
+  }, [hasWeapon, handInvScale, rightHandBone]);
 
   useFrame(({ clock }, delta) => {
     const dt = Math.min(delta, 0.05);
@@ -478,6 +486,21 @@ export function Player({
     // Update animation state machine & speed-matched AnimationMixer blending
     animControllerRef.current.update(step.state, step.horizSpeed, actions);
     mixer.update(dt);
+
+    // Curl right-hand finger bones naturally around the sword handle when summoned
+    if (rightFingersRef.current.length > 0) {
+      for (const f of rightFingersRef.current) {
+        f.bone.quaternion.copy(f.restQuat);
+        if (hasWeapon) {
+          if (f.isThumb) {
+            f.bone.rotateX(-0.52);
+            f.bone.rotateZ(-0.28);
+          } else {
+            f.bone.rotateX(-0.85);
+          }
+        }
+      }
+    }
 
     // Keep feet grounded on terrain/platforms during grounded animation states
     if (modelRef.current && groupRef.current && step.grounded && step.state !== 'Death') {
@@ -552,27 +575,31 @@ export function Player({
     if (step.comboStep > 0) {
       const p = step.attackProgress;
       if (weaponGroupRef.current) {
+        // Subtle wrist snap around grip axis without detaching from palm
         if (step.comboStep === 2) {
-          weaponGroupRef.current.rotation.x = Math.PI / 2 + 0.8 - p * 1.8;
+          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 - 0.18 + p * 0.36;
         } else if (step.comboStep === 3) {
-          weaponGroupRef.current.rotation.x = Math.PI / 2 - 1.2 + p * 2.4;
+          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 - 0.25 + p * 0.55;
         } else {
-          weaponGroupRef.current.rotation.x = Math.PI / 2 - 0.9 + p * 1.9;
+          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 - 0.15 + p * 0.35;
         }
       }
       if (slashTrailRef.current) {
         slashTrailRef.current.visible = step.isAttackActiveHitWindow;
         const trailMat = slashTrailRef.current.material as THREE.MeshBasicMaterial;
         if (step.comboStep === 2) {
-          slashTrailRef.current.rotation.set(Math.PI / 2 - 0.25, 0.2, 1.1 - p * 2.2);
+          slashTrailRef.current.position.set(0.08, 1.18, 0.72);
+          slashTrailRef.current.rotation.set(Math.PI / 2 - 0.22, 0.18, 1.05 - p * 2.1);
           slashTrailRef.current.scale.setScalar(1.05);
           trailMat.color.set('#a78bfa');
         } else if (step.comboStep === 3) {
-          slashTrailRef.current.rotation.set(0.25, Math.PI / 2, -1.2 + p * 2.4);
-          slashTrailRef.current.scale.setScalar(1.3);
+          slashTrailRef.current.position.set(0.05, 1.25, 0.85);
+          slashTrailRef.current.rotation.set(0.22, Math.PI / 2, -1.15 + p * 2.3);
+          slashTrailRef.current.scale.setScalar(1.32);
           trailMat.color.set('#fde047');
         } else {
-          slashTrailRef.current.rotation.set(Math.PI / 2 + 0.2, -0.2, -1.1 + p * 2.2);
+          slashTrailRef.current.position.set(0.08, 1.18, 0.72);
+          slashTrailRef.current.rotation.set(Math.PI / 2 + 0.2, -0.18, -1.05 + p * 2.1);
           slashTrailRef.current.scale.setScalar(1.0);
           trailMat.color.set('#67e8f9');
         }
@@ -611,7 +638,12 @@ export function Player({
       }
     } else {
       if (weaponGroupRef.current) {
-        weaponGroupRef.current.rotation.x = Math.PI / 2;
+        const isBipedHand = rightHandBone ? /Bip001/i.test(rightHandBone.name) : false;
+        if (isBipedHand) {
+          weaponGroupRef.current.rotation.set(0, 0, Math.PI / 2 + 0.16);
+        } else {
+          weaponGroupRef.current.rotation.set(Math.PI / 2, 0, 0);
+        }
       }
       if (slashTrailRef.current) {
         slashTrailRef.current.visible = false;
