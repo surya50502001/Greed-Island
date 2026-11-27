@@ -66,6 +66,7 @@ interface EnemiesProps {
   enemiesRef: React.MutableRefObject<EnemyEntity[]>;
   playerPosRef: React.MutableRefObject<THREE.Vector3>;
   isInvisible: boolean;
+  isFlying?: boolean;
   isPlayerDead: boolean;
   onPlayerHit?: (damage: number, enemyId: string) => void;
 }
@@ -291,6 +292,7 @@ export function Enemies({
   enemiesRef,
   playerPosRef,
   isInvisible,
+  isFlying = false,
   isPlayerDead,
   onPlayerHit,
 }: EnemiesProps) {
@@ -342,7 +344,8 @@ export function Enemies({
       const verticalDiff = Math.abs(playerPos.y - enemy.position.y);
 
       const aggroRange = 17;
-      if (!isPlayerDead && !isInvisible && distToPlayer < aggroRange && verticalDiff < 8.5) {
+      const maxAggroHeight = isFlying ? 2.4 : 4.5;
+      if (!isPlayerDead && !isInvisible && distToPlayer < aggroRange && verticalDiff < maxAggroHeight) {
         enemy.chasing = true;
       } else {
         enemy.chasing = false;
@@ -356,14 +359,23 @@ export function Enemies({
         enemy.attackCooldown = Math.max(0, enemy.attackCooldown - dt);
       }
 
+      const meleeStopRange = 1.2;
+      const meleeHitRange = 1.35;
+      const maxMeleeHeight = 1.65;
+
       if (enemy.chasing) {
-        if (distToTarget > 1.85) {
+        if (distToTarget > meleeStopRange) {
           tempVec.current.normalize();
           const speed = 5.4;
           enemy.position.x += tempVec.current.x * speed * dt;
           enemy.position.z += tempVec.current.z * speed * dt;
           enemy.yaw = Math.atan2(tempVec.current.x, tempVec.current.z);
-        } else if (enemy.attackCooldown <= 0 && !isPlayerDead) {
+        } else if (
+          distToTarget <= meleeHitRange &&
+          verticalDiff <= maxMeleeHeight &&
+          enemy.attackCooldown <= 0 &&
+          !isPlayerDead
+        ) {
           enemy.attackCooldown = 1.4;
           onPlayerHit?.(ENEMY_ATTACK_DAMAGE, enemy.id);
         }

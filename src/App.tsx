@@ -238,6 +238,7 @@ export function App() {
             enemiesRef={enemiesRef}
             playerPosRef={playerPosRef}
             isInvisible={isInvisible}
+            isFlying={isFlying}
             isPlayerDead={isDead}
             onPlayerHit={handlePlayerHit}
           />

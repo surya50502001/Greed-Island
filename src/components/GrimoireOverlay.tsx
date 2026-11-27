@@ -400,7 +400,7 @@ function QuickCastDisplay({
           ? 'Press Enter or wait to cast'
           : isValidPfx && inputBuffer
           ? `Continue typing…`
-          : 'Type card shortcut (A, B, … AA, AB…)'}
+          : 'Type shortcut (A–F, H–Z, AA… · G closes)'}
       </div>
     </div>
   );
@@ -562,6 +562,9 @@ export function GrimoireOverlay({
         return;
       }
 
+      // G is reserved exclusively for opening/closing the Grimoire (handled by App)
+      if (e.code === 'KeyG' || e.key.toUpperCase() === 'G') return;
+
       // Letter keys → build shortcut buffer
       const letter = e.key.toUpperCase();
       if (!/^[A-Z]$/.test(letter)) return;
@@ -691,7 +694,7 @@ export function GrimoireOverlay({
           onClick={onClose}
           style={{ position: 'absolute', top: -40, right: 0 }}
         >
-          ✕ Close Grimoire [Esc]
+          ✕ Close Grimoire [G / Esc]
         </button>
 
         {/* THE BOOK */}
