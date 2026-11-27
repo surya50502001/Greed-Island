@@ -45,7 +45,7 @@ function makePoseClip(
       const q = charDeltaQuat(info, rot[0], rot[1], rot[2]);
       values.push(q[0], q[1], q[2], q[3]);
     }
-    tracks.push(new THREE.QuaternionKeyframeTrack(`${boneName}.quaternion`, times, values));
+    tracks.push(new THREE.QuaternionKeyframeTrack(`${info.bone.name}.quaternion`, times, values));
   }
 
   const hipsInfo = bindMap.get('Hips');
@@ -58,7 +58,7 @@ function makePoseClip(
         hipsInfo.hipsRestPos.z
       );
     }
-    tracks.push(new THREE.VectorKeyframeTrack('Hips.position', times, posValues));
+    tracks.push(new THREE.VectorKeyframeTrack(`${hipsInfo.bone.name}.position`, times, posValues));
   }
 
   return new THREE.AnimationClip(name, duration, tracks);
@@ -72,6 +72,23 @@ function makePoseClip(
 export function buildAdventurerAnimationClips(scene: THREE.Object3D): THREE.AnimationClip[] {
   scene.updateMatrixWorld(true);
 
+  const BIPED_ALIASES: Array<[RegExp, string]> = [
+    [/^Bip001[\s_]+Pelvis(_\d+)?$/i, 'Hips'],
+    [/^Bip001[\s_]+Spine(_\d+)?$/i, 'Torso'],
+    [/^Bip001[\s_]+Spine2(_\d+)?$/i, 'Chest'],
+    [/^Bip001[\s_]+Head(_\d+)?$/i, 'Head'],
+    [/^Bip001[\s_]+L[\s_]+UpperArm(_\d+)?$/i, 'UpperArm.L'],
+    [/^Bip001[\s_]+L[\s_]+Forearm(_\d+)?$/i, 'LowerArm.L'],
+    [/^Bip001[\s_]+R[\s_]+UpperArm(_\d+)?$/i, 'UpperArm.R'],
+    [/^Bip001[\s_]+R[\s_]+Forearm(_\d+)?$/i, 'LowerArm.R'],
+    [/^Bip001[\s_]+L[\s_]+Thigh(_\d+)?$/i, 'UpperLeg.L'],
+    [/^Bip001[\s_]+L[\s_]+Calf(_\d+)?$/i, 'LowerLeg.L'],
+    [/^Bip001[\s_]+L[\s_]+Foot(_\d+)?$/i, 'Foot.L'],
+    [/^Bip001[\s_]+R[\s_]+Thigh(_\d+)?$/i, 'UpperLeg.R'],
+    [/^Bip001[\s_]+R[\s_]+Calf(_\d+)?$/i, 'LowerLeg.R'],
+    [/^Bip001[\s_]+R[\s_]+Foot(_\d+)?$/i, 'Foot.R'],
+  ];
+
   const bindMap = new Map<string, BoneBindInfo>();
   scene.traverse((obj) => {
     if ((obj as THREE.Bone).isBone) {
@@ -79,14 +96,20 @@ export function buildAdventurerAnimationClips(scene: THREE.Object3D): THREE.Anim
       const worldQ = new THREE.Quaternion();
       bone.getWorldQuaternion(worldQ).normalize();
       const restPos = bone.position.clone();
-      bindMap.set(bone.name, {
+      const info: BoneBindInfo = {
         bone,
         bindLocalQuat: bone.quaternion.clone().normalize(),
         worldBindQuat: worldQ,
         worldBindQuatInv: worldQ.clone().invert(),
         hipsRestPos: restPos,
         hipsUnitScale: restPos.length() > 0.2 ? 1 : 0.01,
-      });
+      };
+      bindMap.set(bone.name, info);
+      for (const [pattern, canonical] of BIPED_ALIASES) {
+        if (pattern.test(bone.name) && !bindMap.has(canonical)) {
+          bindMap.set(canonical, info);
+        }
+      }
     }
   });
 

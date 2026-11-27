@@ -1,4 +1,4 @@
-export const DEFAULT_CHARACTER_MODEL_URL = '/models/adventurer_human.glb';
+export const DEFAULT_CHARACTER_MODEL_URL = '/models/anime_hero.glb';
 
 export type CharacterLocomotionState =
   | 'Idle'

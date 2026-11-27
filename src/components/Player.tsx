@@ -162,10 +162,10 @@ export function Player({
           }
         }
       }
-      if (!hand && /^(RightHand|Hand\.R)(_\d+)?$/i.test(obj.name)) {
+      if (!hand && /^(RightHand|Hand\.R|Bip001[\s_]+R[\s_]+Hand)(_\d+)?$/i.test(obj.name)) {
         hand = obj;
       }
-      if (/^((Left|Right)(ToeBase|Foot)|Foot\.(L|R))(_\d+)?$/i.test(obj.name)) {
+      if (/^((Left|Right)(ToeBase|Foot)|Foot\.(L|R)|Bip001[\s_]+(L|R)[\s_]+(Foot|Toe0))(_\d+)?$/i.test(obj.name)) {
         feet.push(obj);
       }
     });
