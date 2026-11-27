@@ -19,6 +19,7 @@ export type CharacterLocomotionState =
   | 'Attack1'
   | 'Attack2'
   | 'Attack3'
+  | 'Attack4'
   | 'Block'
   | 'Dodge'
   | 'HitReaction'
@@ -61,6 +62,7 @@ export const STATE_CLIP_CANDIDATES: Record<CharacterLocomotionState, string[]> =
   Attack1: ['Attack1', 'Attack', 'SwordSlash', 'Slash'],
   Attack2: ['Attack2', 'Attack', 'SwordSlash', 'Slash'],
   Attack3: ['Attack3', 'Attack', 'SwordSlash', 'Slash'],
+  Attack4: ['Attack4', 'Attack3', 'Attack', 'SwordSlash', 'Slash'],
   Block: ['Block', 'SwordBlock', 'Guard'],
   Dodge: ['Dodge', 'Roll', 'Evade'],
   HitReaction: ['HitReaction', 'Hit', 'Damage'],
@@ -82,6 +84,7 @@ const ONE_SHOT_STATES = new Set<CharacterLocomotionState>([
   'Attack1',
   'Attack2',
   'Attack3',
+  'Attack4',
   'Dodge',
   'HitReaction',
   'Death',

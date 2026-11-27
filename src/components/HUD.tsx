@@ -1,5 +1,10 @@
 import React from 'react';
 import { INVISIBILITY_DURATION, PLAYER_MAX_HP } from '../types/game';
+import { FloatingDamageEvent } from './Player';
+
+export interface ActiveDamageNumber extends FloatingDamageEvent {
+  id: number;
+}
 
 interface HUDProps {
   hp: number;
@@ -10,6 +15,7 @@ interface HUDProps {
   invisTimer: number;
   isGrimoireOpen: boolean;
   hideKeyboardHints?: boolean;
+  damageNumbers?: ActiveDamageNumber[];
   onRevive: () => void;
 }
 
@@ -22,6 +28,7 @@ export const HUD: React.FC<HUDProps> = ({
   invisTimer,
   isGrimoireOpen,
   hideKeyboardHints = false,
+  damageNumbers = [],
   onRevive,
 }) => {
   const isInvisible = invisTimer > 0;
@@ -171,6 +178,36 @@ export const HUD: React.FC<HUDProps> = ({
           )}
         </div>
       </div>
+
+      {/* Floating Anime Damage Numbers */}
+      {damageNumbers.map((dn) => (
+        <div
+          key={dn.id}
+          className="floating-dmg"
+          style={{
+            position: 'fixed',
+            left: `${dn.x}%`,
+            top: `${dn.y}%`,
+            pointerEvents: 'none',
+            fontWeight: 900,
+            fontSize: dn.isFinisher ? '26px' : dn.comboStep === 3 ? '21px' : '18px',
+            color: dn.isFinisher
+              ? '#fde047'
+              : dn.comboStep === 3
+                ? '#facc15'
+                : dn.comboStep === 2
+                  ? '#d8b4fe'
+                  : '#67e8f9',
+            textShadow: dn.isFinisher
+              ? '0 0 12px rgba(249, 115, 22, 0.95), 0 2px 4px rgba(0,0,0,0.9)'
+              : '0 2px 6px rgba(0, 0, 0, 0.9)',
+            letterSpacing: '0.02em',
+            zIndex: 25,
+          }}
+        >
+          {dn.isFinisher ? `${dn.amount}!` : dn.amount}
+        </div>
+      ))}
 
       {/* Death & Revival Overlay */}
       {isDead && (

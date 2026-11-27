@@ -6,9 +6,15 @@ import { CardId, INVISIBILITY_DURATION, PLAYER_MAX_HP } from './types/game';
 import { getGroundHeight } from './world/terrain';
 import { World } from './components/World';
 import { createInitialEnemies, Enemies, EnemyEntity } from './components/Enemies';
-import { Player, PlayerCombatBridge, PlayerTouchBridge } from './components/Player';
+import {
+  FloatingDamageEvent,
+  Player,
+  PlayerCombatBridge,
+  PlayerTouchBridge,
+} from './components/Player';
+import { CombatVFX, CombatVFXHandle } from './components/CombatVFX';
 import { Grimoire } from './components/Grimoire';
-import { HUD } from './components/HUD';
+import { ActiveDamageNumber, HUD } from './components/HUD';
 import { MobileControls } from './components/MobileControls';
 import {
   applyPlayerDamage,
@@ -31,7 +37,18 @@ export function App() {
   const enemiesRef = useRef<EnemyEntity[]>(createInitialEnemies());
   const combatBridgeRef = useRef<PlayerCombatBridge | null>(null);
   const touchBridgeRef = useRef<PlayerTouchBridge | null>(null);
+  const vfxRef = useRef<CombatVFXHandle | null>(null);
   const lastDamageTimeRef = useRef<number>(0);
+  const dmgIdRef = useRef<number>(1);
+  const [damageNumbers, setDamageNumbers] = useState<ActiveDamageNumber[]>([]);
+
+  const handleDamageNumber = useCallback((ev: FloatingDamageEvent) => {
+    const id = dmgIdRef.current++;
+    setDamageNumbers((prev) => [...prev.slice(-9), { ...ev, id }]);
+    window.setTimeout(() => {
+      setDamageNumbers((prev) => prev.filter((item) => item.id !== id));
+    }, 680);
+  }, []);
 
   const isDead = playerHp <= 0;
 
@@ -196,6 +213,7 @@ export function App() {
             isPlayerDead={isDead}
             onPlayerHit={handlePlayerHit}
           />
+          <CombatVFX ref={vfxRef} />
           <Player
             playerPosRef={playerPosRef}
             enemiesRef={enemiesRef}
@@ -206,6 +224,8 @@ export function App() {
             isDead={isDead}
             combatBridgeRef={combatBridgeRef}
             touchBridgeRef={touchBridgeRef}
+            vfxRef={vfxRef}
+            onDamageNumber={handleDamageNumber}
             onPointerLockChange={setPointerLocked}
           />
         </Suspense>
@@ -228,6 +248,7 @@ export function App() {
         invisTimer={invisTimer}
         isGrimoireOpen={isGrimoireOpen}
         hideKeyboardHints={isTouchVisible}
+        damageNumbers={damageNumbers}
         onRevive={handleRevive}
       />
       <MobileControls

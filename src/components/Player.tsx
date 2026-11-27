@@ -4,15 +4,23 @@ import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { getGroundHeight } from '../world/terrain';
 import { EnemyEntity } from './Enemies';
-import { CharacterController } from '../gameplay/character/CharacterController';
+import { CharacterController, COMBO_SPECS, ActiveComboStep } from '../gameplay/character/CharacterController';
 import { CharacterAnimationController } from '../gameplay/character/CharacterAnimationController';
 import { buildAdventurerAnimationClips } from '../gameplay/character/HumanAnimationClips';
 import {
   DEFAULT_CHARACTER_MODEL_URL,
   getMissingStatesForClips,
 } from '../gameplay/character/CharacterStates';
-import { PLAYER_ATTACK_DAMAGE } from '../gameplay/combat/HealthSystem';
 import { EnergySword } from './EnergySword';
+import { CombatVFXHandle, createCrescentArcGeometry } from './CombatVFX';
+
+export interface FloatingDamageEvent {
+  x: number;
+  y: number;
+  amount: number;
+  isFinisher: boolean;
+  comboStep: number;
+}
 
 export interface PlayerTouchBridge {
   setMove: (x: number, y: number) => void;
@@ -39,7 +47,25 @@ interface PlayerProps {
   isDead: boolean;
   combatBridgeRef?: React.MutableRefObject<PlayerCombatBridge | null>;
   touchBridgeRef?: React.MutableRefObject<PlayerTouchBridge | null>;
+  vfxRef?: React.RefObject<CombatVFXHandle | null>;
+  onDamageNumber?: (ev: FloatingDamageEvent) => void;
   onPointerLockChange: (locked: boolean) => void;
+}
+
+function pointToSegmentDistXZ(
+  px: number,
+  pz: number,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number
+): number {
+  const abx = bx - ax;
+  const abz = bz - az;
+  const lenSq = abx * abx + abz * abz;
+  if (lenSq < 1e-6) return Math.hypot(px - ax, pz - az);
+  const t = Math.max(0, Math.min(1, ((px - ax) * abx + (pz - az) * abz) / lenSq));
+  return Math.hypot(px - (ax + abx * t), pz - (az + abz * t));
 }
 
 export function Player({
@@ -53,6 +79,8 @@ export function Player({
   isDead,
   combatBridgeRef,
   touchBridgeRef,
+  vfxRef,
+  onDamageNumber,
   onPointerLockChange,
 }: PlayerProps) {
   const { camera, gl } = useThree();
@@ -62,6 +90,7 @@ export function Player({
   const tiltGroupRef = useRef<THREE.Group>(null);
   const modelRef = useRef<THREE.Group>(null);
   const slashTrailRef = useRef<THREE.Mesh>(null);
+  const slashAuraRef = useRef<THREE.Mesh>(null);
   const auraGroupRef = useRef<THREE.Group>(null);
   const weaponGroupRef = useRef<THREE.Group>(null);
 
@@ -95,6 +124,32 @@ export function Player({
   const isDraggingRef = useRef(false);
   const hitEnemiesThisAttackRef = useRef<Set<string>>(new Set());
   const lastAttackIdRef = useRef<number>(0);
+  const finisherShockwaveFiredRef = useRef<boolean>(false);
+  const hitStopTimerRef = useRef<number>(0);
+  const shakeIntensityRef = useRef<number>(0);
+
+  // Reusable swept-blade & projection vectors (zero per-frame allocations)
+  const bladeBaseRef = useRef(new THREE.Vector3());
+  const bladeTipRef = useRef(new THREE.Vector3());
+  const prevBladeBaseRef = useRef(new THREE.Vector3());
+  const prevBladeTipRef = useRef(new THREE.Vector3());
+  const hasPrevBladeRef = useRef(false);
+  const impactPointRef = useRef(new THREE.Vector3());
+  const projVecRef = useRef(new THREE.Vector3());
+
+  const { crescentGeo, spinCrescentGeo } = useMemo(() => {
+    return {
+      crescentGeo: createCrescentArcGeometry(1.05, 0.72, Math.PI * 0.92, 36),
+      spinCrescentGeo: createCrescentArcGeometry(1.12, 0.9, Math.PI * 1.55, 44),
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      crescentGeo.dispose();
+      spinCrescentGeo.dispose();
+    };
+  }, [crescentGeo, spinCrescentGeo]);
 
   // Reusable camera vectors
   const camTargetRef = useRef(new THREE.Vector3());
@@ -462,7 +517,12 @@ export function Player({
   }, [hasWeapon, handInvScale, rightHandBone]);
 
   useFrame(({ clock }, delta) => {
-    const dt = Math.min(delta, 0.05);
+    const rawDt = Math.min(delta, 0.05);
+    let dt = rawDt;
+    if (hitStopTimerRef.current > 0) {
+      hitStopTimerRef.current = Math.max(0, hitStopTimerRef.current - rawDt);
+      dt = rawDt * 0.05;
+    }
     const ctrl = controllerRef.current;
 
     const step = ctrl.update(
@@ -514,7 +574,21 @@ export function Player({
           if (footPosRef.current.y < minFootY) minFootY = footPosRef.current.y;
         }
         if (minFootY < Infinity) {
-          modelRef.current.position.y += footClearanceRef.current - minFootY;
+          const isSprinting = step.state === 'Sprint' || step.state === 'Jog';
+          if (isSprinting) {
+            // Allow airborne stride lift while still preventing feet from sinking below terrain
+            if (minFootY < footClearanceRef.current) {
+              modelRef.current.position.y += footClearanceRef.current - minFootY;
+            } else {
+              modelRef.current.position.y = THREE.MathUtils.lerp(
+                modelRef.current.position.y,
+                modelOffsetY,
+                1 - Math.exp(-10 * dt)
+              );
+            }
+          } else {
+            modelRef.current.position.y += footClearanceRef.current - minFootY;
+          }
         }
       }
     } else if (modelRef.current && (!step.grounded || step.state === 'Death')) {
@@ -525,39 +599,50 @@ export function Player({
       );
     }
 
-    // Subtle posture layer for flight tilt, landing squash, hit stagger, & 3-hit attack body motion
+    // Subtle posture layer for flight tilt, landing squash, hit stagger, & 4-hit attack body motion
     if (tiltGroupRef.current) {
       let targetTiltX = step.flightTiltX;
       let targetTwistY = 0;
       let targetRollZ = step.flightRollZ;
+      let instantSpinY: number | null = null;
 
       if (step.comboStep > 0) {
         const p = step.attackProgress;
-        if (step.comboStep === 2) {
-          targetTwistY = p < 0.22 ? 0.45 * (p / 0.22) : 0.45 - ((p - 0.22) / 0.78) * 1.15;
-        } else if (step.comboStep === 3) {
-          targetTiltX += p < 0.3 ? -0.16 * (p / 0.3) : 0.28 * Math.sin(((p - 0.3) / 0.7) * Math.PI);
-        } else {
-          targetTwistY = p < 0.24 ? -0.45 * (p / 0.24) : -0.45 + ((p - 0.24) / 0.76) * 1.15;
+        if (step.comboStep === 1) {
+          targetTwistY = p < 0.24 ? -0.42 * (p / 0.24) : -0.42 + ((p - 0.24) / 0.76) * 1.05;
           targetTiltX += 0.14 * Math.sin(p * Math.PI);
+        } else if (step.comboStep === 2) {
+          targetTwistY = p < 0.22 ? 0.45 * (p / 0.22) : 0.45 - ((p - 0.22) / 0.78) * 1.12;
+          targetTiltX += 0.08 * Math.sin(p * Math.PI);
+        } else if (step.comboStep === 3) {
+          // True 360° anime whirlwind spin synchronized with Spinning Crescent
+          const spinP = Math.max(0, Math.min(1, (p - 0.08) / 0.74));
+          const eased = 1 - Math.pow(1 - spinP, 2.2);
+          instantSpinY = eased * Math.PI * 2;
+          targetTiltX += 0.16 * Math.sin(p * Math.PI);
+        } else {
+          // Attack 4: Arcane Breaker overhead arch -> heavy downward cleave
+          targetTiltX += p < 0.34 ? -0.18 * (p / 0.34) : 0.32 * Math.sin(((p - 0.34) / 0.66) * Math.PI);
+          targetTwistY = p < 0.34 ? -0.1 : 0.22;
         }
       } else if (step.state === 'HitReaction') {
         targetTiltX = -0.28 * Math.sin(step.hitReactionProgress * Math.PI);
       } else if (step.state === 'Land') {
         targetTiltX = 0.14;
+      } else if (step.state === 'Sprint') {
+        targetTiltX = 0.14;
       }
 
-      const postureLerp = 1 - Math.exp(-12 * dt);
+      const postureLerp = 1 - Math.exp(-14 * dt);
       tiltGroupRef.current.rotation.x = THREE.MathUtils.lerp(
         tiltGroupRef.current.rotation.x,
         targetTiltX,
         postureLerp
       );
-      tiltGroupRef.current.rotation.y = THREE.MathUtils.lerp(
-        tiltGroupRef.current.rotation.y,
-        targetTwistY,
-        postureLerp
-      );
+      tiltGroupRef.current.rotation.y =
+        instantSpinY !== null
+          ? instantSpinY
+          : THREE.MathUtils.lerp(tiltGroupRef.current.rotation.y, targetTwistY, postureLerp);
       tiltGroupRef.current.rotation.z = THREE.MathUtils.lerp(
         tiltGroupRef.current.rotation.z,
         targetRollZ,
@@ -565,52 +650,123 @@ export function Player({
       );
     }
 
-    // Reset hit set whenever a new attack swing (combo step 1, 2, or 3) begins
+    // Reset hit set & swept blade history whenever a new attack swing begins
     if (step.attackId !== lastAttackIdRef.current) {
       lastAttackIdRef.current = step.attackId;
       hitEnemiesThisAttackRef.current.clear();
+      finisherShockwaveFiredRef.current = false;
+      hasPrevBladeRef.current = false;
     }
 
-    // Weapon swing & hit detection synchronized with active attack frames across 3-hit combo
+    // Weapon swing, crescent slash VFX, & swept-blade hit detection across 4-hit combo
     if (step.comboStep > 0) {
+      const activeStep = step.comboStep as ActiveComboStep;
+      const spec = COMBO_SPECS[activeStep];
       const p = step.attackProgress;
+
       if (weaponGroupRef.current) {
-        // Subtle wrist snap around grip axis without detaching from palm
-        if (step.comboStep === 2) {
-          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 - 0.18 + p * 0.36;
-        } else if (step.comboStep === 3) {
-          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 - 0.25 + p * 0.55;
+        if (activeStep === 1) {
+          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 - 0.16 + p * 0.36;
+        } else if (activeStep === 2) {
+          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 + 0.18 - p * 0.38;
+        } else if (activeStep === 3) {
+          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.22;
         } else {
-          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 - 0.15 + p * 0.35;
+          weaponGroupRef.current.rotation.z = Math.PI / 2 + 0.16 - 0.28 + p * 0.62;
         }
       }
-      if (slashTrailRef.current) {
-        slashTrailRef.current.visible = step.isAttackActiveHitWindow;
-        const trailMat = slashTrailRef.current.material as THREE.MeshBasicMaterial;
-        if (step.comboStep === 2) {
-          slashTrailRef.current.position.set(0.08, 1.18, 0.72);
-          slashTrailRef.current.rotation.set(Math.PI / 2 - 0.22, 0.18, 1.05 - p * 2.1);
-          slashTrailRef.current.scale.setScalar(1.05);
-          trailMat.color.set('#a78bfa');
-        } else if (step.comboStep === 3) {
-          slashTrailRef.current.position.set(0.05, 1.25, 0.85);
-          slashTrailRef.current.rotation.set(0.22, Math.PI / 2, -1.15 + p * 2.3);
-          slashTrailRef.current.scale.setScalar(1.32);
-          trailMat.color.set('#fde047');
-        } else {
-          slashTrailRef.current.position.set(0.08, 1.18, 0.72);
-          slashTrailRef.current.rotation.set(Math.PI / 2 + 0.2, -0.18, -1.05 + p * 2.1);
-          slashTrailRef.current.scale.setScalar(1.0);
-          trailMat.color.set('#67e8f9');
+
+      // Trigger Arcane Breaker ground shockwave at impact frame
+      if (activeStep === 4 && p >= 0.42 && !finisherShockwaveFiredRef.current) {
+        finisherShockwaveFiredRef.current = true;
+        impactPointRef.current.set(
+          ctrl.position.x + Math.sin(ctrl.yaw) * 2.1,
+          ctrl.position.y,
+          ctrl.position.z + Math.cos(ctrl.yaw) * 2.1
+        );
+        vfxRef?.current?.spawnFinisherShockwave(impactPointRef.current);
+        shakeIntensityRef.current = Math.max(shakeIntensityRef.current, 0.18);
+      }
+
+      const trailColor =
+        activeStep === 1
+          ? '#67e8f9'
+          : activeStep === 2
+            ? '#c084fc'
+            : activeStep === 3
+              ? '#fde047'
+              : '#fb923c';
+      const auraColor =
+        activeStep === 1
+          ? '#0ea5e9'
+          : activeStep === 2
+            ? '#8b5cf6'
+            : activeStep === 3
+              ? '#38bdf8'
+              : '#fde047';
+
+      const showTrail = step.isAttackActiveHitWindow;
+      const trailFade = showTrail
+        ? Math.sin(
+            ((p - spec.activeWindow[0]) / (spec.activeWindow[1] - spec.activeWindow[0])) * Math.PI
+          )
+        : 0;
+
+      if (slashTrailRef.current && slashAuraRef.current) {
+        slashTrailRef.current.visible = showTrail;
+        slashAuraRef.current.visible = showTrail;
+        const targetGeo = activeStep === 3 ? spinCrescentGeo : crescentGeo;
+        if (slashTrailRef.current.geometry !== targetGeo) {
+          slashTrailRef.current.geometry = targetGeo;
+          slashAuraRef.current.geometry = targetGeo;
         }
+
+        const coreMat = slashTrailRef.current.material as THREE.MeshBasicMaterial;
+        const auraMat = slashAuraRef.current.material as THREE.MeshBasicMaterial;
+        coreMat.color.set(trailColor);
+        coreMat.opacity = Math.max(0.15, trailFade * 0.92);
+        auraMat.color.set(auraColor);
+        auraMat.opacity = Math.max(0.08, trailFade * 0.45);
+
+        if (activeStep === 1) {
+          slashTrailRef.current.position.set(0.06, 1.18, 0.72);
+          slashTrailRef.current.rotation.set(Math.PI / 2 + 0.38, -0.26, -1.15 + p * 2.2);
+          slashTrailRef.current.scale.setScalar(1.0);
+        } else if (activeStep === 2) {
+          slashTrailRef.current.position.set(0.06, 1.18, 0.72);
+          slashTrailRef.current.rotation.set(Math.PI / 2 - 0.38, 0.26, 1.15 - p * 2.2);
+          slashTrailRef.current.scale.setScalar(1.06);
+        } else if (activeStep === 3) {
+          slashTrailRef.current.position.set(0, 1.14, 0.18);
+          slashTrailRef.current.rotation.set(Math.PI / 2, 0.08, -p * Math.PI * 2.2);
+          slashTrailRef.current.scale.setScalar(1.18);
+        } else {
+          slashTrailRef.current.position.set(0.06, 1.24, 0.88);
+          slashTrailRef.current.rotation.set(0.18, Math.PI / 2, -1.35 + p * 2.4);
+          slashTrailRef.current.scale.setScalar(1.38);
+        }
+
+        slashAuraRef.current.position.copy(slashTrailRef.current.position);
+        slashAuraRef.current.rotation.copy(slashTrailRef.current.rotation);
+        slashAuraRef.current.scale.copy(slashTrailRef.current.scale).multiplyScalar(1.14);
+      }
+
+      // Compute actual world-space blade segment [base -> tip]
+      if (weaponGroupRef.current) {
+        weaponGroupRef.current.updateMatrixWorld(true);
+        bladeBaseRef.current.set(0, 0.18, 0).applyMatrix4(weaponGroupRef.current.matrixWorld);
+        bladeTipRef.current.set(0, 1.2, 0).applyMatrix4(weaponGroupRef.current.matrixWorld);
+      } else {
+        bladeBaseRef.current.copy(ctrl.position).add(new THREE.Vector3(0, 1.1, 0));
+        bladeTipRef.current
+          .copy(ctrl.position)
+          .add(new THREE.Vector3(Math.sin(ctrl.yaw) * 1.4, 1.1, Math.cos(ctrl.yaw) * 1.4));
       }
 
       if (step.isAttackActiveHitWindow) {
         const pFwdX = Math.sin(ctrl.yaw);
         const pFwdZ = Math.cos(ctrl.yaw);
-        const damage = step.comboStep === 3 ? PLAYER_ATTACK_DAMAGE + 10 : PLAYER_ATTACK_DAMAGE;
-        const knockbackForce = step.comboStep === 3 ? 20 : 13;
-        const reach = step.comboStep === 3 ? 4.9 : 4.4;
+        const isFinisher = activeStep === 4;
 
         for (const enemy of enemiesRef.current) {
           if (!enemy.alive || hitEnemiesThisAttackRef.current.has(enemy.id)) continue;
@@ -618,25 +774,81 @@ export function Player({
           const dy = enemy.position.y - ctrl.position.y;
           const dz = enemy.position.z - ctrl.position.z;
           const dist = Math.hypot(dx, dz);
-          if (dist < reach && Math.abs(dy) < 3.5) {
-            const dot = (dx * pFwdX + dz * pFwdZ) / (dist || 1);
-            if (dist < 2.2 || dot > 0.1) {
-              hitEnemiesThisAttackRef.current.add(enemy.id);
-              enemy.hitFlash = 0.22;
-              enemy.hp = Math.max(0, enemy.hp - damage);
-              const invD = 1 / (dist || 1);
-              enemy.knockbackX = dx * invD * knockbackForce;
-              enemy.knockbackZ = dz * invD * knockbackForce;
-              if (enemy.hp <= 0) {
-                enemy.alive = false;
-                enemy.chasing = false;
-                enemy.respawnTimer = 14;
+          if (Math.abs(dy) >= 3.5) continue;
+
+          // Swept blade collision distance in XZ
+          const currBladeDist = pointToSegmentDistXZ(
+            enemy.position.x,
+            enemy.position.z,
+            bladeBaseRef.current.x,
+            bladeBaseRef.current.z,
+            bladeTipRef.current.x,
+            bladeTipRef.current.z
+          );
+          let minBladeDist = currBladeDist;
+          if (hasPrevBladeRef.current) {
+            const sweptTipDist = pointToSegmentDistXZ(
+              enemy.position.x,
+              enemy.position.z,
+              prevBladeTipRef.current.x,
+              prevBladeTipRef.current.z,
+              bladeTipRef.current.x,
+              bladeTipRef.current.z
+            );
+            minBladeDist = Math.min(minBladeDist, sweptTipDist);
+          }
+
+          // Match visual crescent arc & actual blade reach while preventing hits behind player (except 360° Attack 3)
+          const dot = (dx * pFwdX + dz * pFwdZ) / (dist || 1);
+          const inFrontArc = spec.isAoe360 ? dist < spec.reach : (dist < spec.reach && (dot > -0.12 || dist < 1.35));
+          const bladeHit = minBladeDist < (isFinisher ? 2.15 : 1.75);
+
+          if (inFrontArc && (bladeHit || dist < spec.reach * 0.72)) {
+            hitEnemiesThisAttackRef.current.add(enemy.id);
+            enemy.hitFlash = isFinisher ? 0.3 : 0.22;
+            enemy.hp = Math.max(0, enemy.hp - spec.damage);
+            const invD = 1 / (dist || 1);
+            enemy.knockbackX = dx * invD * spec.knockback;
+            enemy.knockbackZ = dz * invD * spec.knockback;
+            if (enemy.hp <= 0) {
+              enemy.alive = false;
+              enemy.chasing = false;
+              enemy.respawnTimer = 14;
+            }
+
+            // Combat feedback: brief hit-stop, camera shake, pooled sparks, floating damage number
+            hitStopTimerRef.current = Math.max(hitStopTimerRef.current, isFinisher ? 0.068 : 0.03);
+            shakeIntensityRef.current = Math.max(shakeIntensityRef.current, isFinisher ? 0.22 : 0.085);
+            vfxRef?.current?.spawnHitImpact(
+              enemy.position,
+              dx * invD,
+              dz * invD,
+              trailColor,
+              isFinisher
+            );
+
+            if (onDamageNumber) {
+              projVecRef.current.set(enemy.position.x, enemy.position.y + 1.5, enemy.position.z);
+              projVecRef.current.project(camera);
+              if (projVecRef.current.z < 1) {
+                onDamageNumber({
+                  x: (projVecRef.current.x * 0.5 + 0.5) * 100,
+                  y: (-projVecRef.current.y * 0.5 + 0.5) * 100,
+                  amount: spec.damage,
+                  isFinisher,
+                  comboStep: activeStep,
+                });
               }
             }
           }
         }
       }
+
+      prevBladeBaseRef.current.copy(bladeBaseRef.current);
+      prevBladeTipRef.current.copy(bladeTipRef.current);
+      hasPrevBladeRef.current = true;
     } else {
+      hasPrevBladeRef.current = false;
       if (weaponGroupRef.current) {
         const isBipedHand = rightHandBone ? /Bip001/i.test(rightHandBone.name) : false;
         if (isBipedHand) {
@@ -645,9 +857,8 @@ export function Player({
           weaponGroupRef.current.rotation.set(Math.PI / 2, 0, 0);
         }
       }
-      if (slashTrailRef.current) {
-        slashTrailRef.current.visible = false;
-      }
+      if (slashTrailRef.current) slashTrailRef.current.visible = false;
+      if (slashAuraRef.current) slashAuraRef.current.visible = false;
     }
 
     // Flight aura animation
@@ -684,7 +895,16 @@ export function Player({
     if (camY < terrainUnderCam) camY = terrainUnderCam;
 
     camPosRef.current.set(camX, camY, camZ);
-    camera.position.lerp(camPosRef.current, 1 - Math.exp(-18 * dt));
+    camera.position.lerp(camPosRef.current, 1 - Math.exp(-18 * rawDt));
+    if (shakeIntensityRef.current > 0.002) {
+      const s = shakeIntensityRef.current;
+      camera.position.x += (Math.random() - 0.5) * s;
+      camera.position.y += (Math.random() - 0.5) * s * 0.8;
+      camera.position.z += (Math.random() - 0.5) * s;
+      shakeIntensityRef.current *= Math.exp(-14 * rawDt);
+    } else {
+      shakeIntensityRef.current = 0;
+    }
     camera.lookAt(camTargetRef.current);
   });
 
@@ -705,15 +925,38 @@ export function Player({
 
       {rightHandBone && weaponElement && createPortal(weaponElement, rightHandBone)}
 
-      {/* Melee Swing Trail */}
+      {/* Anime Crescent Melee Slash Trail (core + additive energy wake) */}
       <mesh
         ref={slashTrailRef}
+        geometry={crescentGeo}
         visible={false}
         position={[0, 1.25, 0.55]}
         rotation={[Math.PI / 2, 0, 0]}
       >
-        <ringGeometry args={[1.1, 2.2, 24, 1, -Math.PI * 0.45, Math.PI * 0.9]} />
-        <meshBasicMaterial color="#67e8f9" transparent opacity={0.78} side={THREE.DoubleSide} />
+        <meshBasicMaterial
+          color="#67e8f9"
+          transparent
+          opacity={0.85}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      <mesh
+        ref={slashAuraRef}
+        geometry={crescentGeo}
+        visible={false}
+        position={[0, 1.25, 0.55]}
+        rotation={[Math.PI / 2, 0, 0]}
+      >
+        <meshBasicMaterial
+          color="#0ea5e9"
+          transparent
+          opacity={0.4}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          side={THREE.DoubleSide}
+        />
       </mesh>
 
       {/* Flight Wind / Aura Effect (framed low around feet/lower coat so body & face stay clear) */}

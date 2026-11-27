@@ -14,6 +14,78 @@ export interface CharacterInputState {
   block: boolean;
 }
 
+export type ComboStep = 0 | 1 | 2 | 3 | 4;
+export type ActiveComboStep = 1 | 2 | 3 | 4;
+
+export interface ComboAttackSpec {
+  name: string;
+  duration: number;
+  activeWindow: [number, number];
+  bufferStart: number;
+  chainWindow: number;
+  cooldown: number;
+  lunge: number;
+  damage: number;
+  knockback: number;
+  reach: number;
+  isAoe360: boolean;
+}
+
+export const COMBO_SPECS: Record<ActiveComboStep, ComboAttackSpec> = {
+  1: {
+    name: 'Quick Cross Slash',
+    duration: 0.36,
+    activeWindow: [0.24, 0.62],
+    bufferStart: 0.2,
+    chainWindow: 0.72,
+    cooldown: 0.06,
+    lunge: 3.2,
+    damage: 22,
+    knockback: 12,
+    reach: 4.2,
+    isAoe360: false,
+  },
+  2: {
+    name: 'Reverse Slash',
+    duration: 0.38,
+    activeWindow: [0.22, 0.62],
+    bufferStart: 0.2,
+    chainWindow: 0.72,
+    cooldown: 0.06,
+    lunge: 3.6,
+    damage: 26,
+    knockback: 14,
+    reach: 4.4,
+    isAoe360: false,
+  },
+  3: {
+    name: 'Spinning Crescent',
+    duration: 0.48,
+    activeWindow: [0.22, 0.74],
+    bufferStart: 0.24,
+    chainWindow: 0.78,
+    cooldown: 0.08,
+    lunge: 4.2,
+    damage: 32,
+    knockback: 16,
+    reach: 4.8,
+    isAoe360: true,
+  },
+  4: {
+    name: 'Arcane Breaker',
+    duration: 0.68,
+    activeWindow: [0.38, 0.68],
+    bufferStart: 1.0,
+    chainWindow: 0,
+    cooldown: 0.38,
+    lunge: 5.8,
+    damage: 52,
+    knockback: 24,
+    reach: 5.2,
+    isAoe360: false,
+  },
+};
+
 export interface CharacterStepResult {
   state: CharacterLocomotionState;
   horizSpeed: number;
@@ -21,25 +93,13 @@ export interface CharacterStepResult {
   grounded: boolean;
   attackProgress: number;
   isAttackActiveHitWindow: boolean;
-  comboStep: 0 | 1 | 2 | 3;
+  comboStep: ComboStep;
   attackId: number;
   hitReactionProgress: number;
   isBlocking: boolean;
   flightTiltX: number;
   flightRollZ: number;
 }
-
-const COMBO_DURATIONS: Record<1 | 2 | 3, number> = {
-  1: 0.38,
-  2: 0.4,
-  3: 0.52,
-};
-
-const COMBO_ACTIVE_WINDOWS: Record<1 | 2 | 3, [number, number]> = {
-  1: [0.24, 0.64],
-  2: [0.22, 0.64],
-  3: [0.3, 0.68],
-};
 
 export class CharacterController {
   public readonly position: THREE.Vector3;
@@ -68,12 +128,12 @@ export class CharacterController {
   private flightTakeoffTimer = 0;
   private flightLandTimer = 0;
 
-  // 3-hit sword combo, death & reaction state
+  // 4-hit sword combo, death & reaction state
   private isDead = false;
   private attackTimer = 0;
-  private attackDuration = 0.38;
+  private attackDuration = 0.36;
   private attackCooldown = 0;
-  private comboStep: 0 | 1 | 2 | 3 = 0;
+  private comboStep: ComboStep = 0;
   private comboWindowTimer = 0;
   private attackQueued = false;
   private attackId = 0;
@@ -135,7 +195,7 @@ export class CharacterController {
   }
 
   public triggerAttack(hasWeapon: boolean, isGrimoireOpen: boolean): boolean {
-    if (this.isDead || !hasWeapon || isGrimoireOpen) return false;
+    if (this.isDead || !hasWeapon || isGrimoireOpen || this.prevIsFlying) return false;
     const input = this.readInputs(isGrimoireOpen);
     if (
       this.hitReactionTimer > 0 ||
@@ -146,11 +206,14 @@ export class CharacterController {
       return false;
     }
 
-    // If currently mid-swing, buffer the next combo hit during late windup/active/recovery
+    // If currently mid-swing, buffer the next combo hit during valid combo window
     if (this.attackTimer > 0) {
       const progress = 1 - this.attackTimer / this.attackDuration;
-      if (this.comboStep < 3 && progress >= 0.25) {
-        this.attackQueued = true;
+      if (this.comboStep >= 1 && this.comboStep < 4) {
+        const spec = COMBO_SPECS[this.comboStep as ActiveComboStep];
+        if (progress >= spec.bufferStart) {
+          this.attackQueued = true;
+        }
       }
       return false;
     }
@@ -162,25 +225,27 @@ export class CharacterController {
   }
 
   private startNextComboHit(): void {
-    const nextStep: 1 | 2 | 3 =
+    const nextStep: ActiveComboStep =
       this.comboStep === 1 && this.comboWindowTimer > 0
         ? 2
         : this.comboStep === 2 && this.comboWindowTimer > 0
           ? 3
-          : 1;
+          : this.comboStep === 3 && this.comboWindowTimer > 0
+            ? 4
+            : 1;
 
+    const spec = COMBO_SPECS[nextStep];
     this.comboStep = nextStep;
-    this.attackDuration = COMBO_DURATIONS[nextStep];
-    this.attackTimer = this.attackDuration;
-    this.attackCooldown = nextStep === 3 ? 0.34 : 0.08;
-    this.comboWindowTimer = nextStep === 3 ? 0 : 0.68;
+    this.attackDuration = spec.duration;
+    this.attackTimer = spec.duration;
+    this.attackCooldown = spec.cooldown;
+    this.comboWindowTimer = spec.chainWindow;
     this.attackQueued = false;
     this.attackId += 1;
 
-    // Subtle forward attack step momentum
-    const lunge = nextStep === 3 ? 5.6 : 3.2;
-    this.velocity.x += Math.sin(this.yaw) * lunge;
-    this.velocity.z += Math.cos(this.yaw) * lunge;
+    // Forward attack step momentum
+    this.velocity.x += Math.sin(this.yaw) * spec.lunge;
+    this.velocity.z += Math.cos(this.yaw) * spec.lunge;
   }
 
   public triggerDodge(isFlying: boolean, isGrimoireOpen: boolean): boolean {
@@ -264,6 +329,7 @@ export class CharacterController {
       case 'Attack1':
       case 'Attack2':
       case 'Attack3':
+      case 'Attack4':
         this.attackTimer = 0;
         break;
       case 'Dodge':
@@ -333,10 +399,10 @@ export class CharacterController {
     if (this.attackTimer > 0) {
       this.attackTimer = Math.max(0, this.attackTimer - safeDt);
       if (this.attackTimer === 0) {
-        if (this.attackQueued && hasWeapon && !isGrimoireOpen && !this.isDead) {
-          this.comboWindowTimer = 0.68;
+        if (this.attackQueued && hasWeapon && !isGrimoireOpen && !this.isDead && !isFlying && !input.block) {
+          this.comboWindowTimer = COMBO_SPECS[this.comboStep as ActiveComboStep]?.chainWindow ?? 0.72;
           this.startNextComboHit();
-        } else if (this.comboStep === 3) {
+        } else if (this.comboStep === 4) {
           this.comboStep = 0;
           this.comboWindowTimer = 0;
         }
@@ -582,10 +648,10 @@ export class CharacterController {
 
     const attackProgress =
       this.attackTimer > 0 ? 1 - this.attackTimer / this.attackDuration : 0;
-    const activeComboStep = (this.attackTimer > 0 ? this.comboStep : 0) as 0 | 1 | 2 | 3;
+    const activeComboStep = (this.attackTimer > 0 ? this.comboStep : 0) as ComboStep;
     const [winStart, winEnd] =
-      activeComboStep === 1 || activeComboStep === 2 || activeComboStep === 3
-        ? COMBO_ACTIVE_WINDOWS[activeComboStep]
+      activeComboStep >= 1 && activeComboStep <= 4
+        ? COMBO_SPECS[activeComboStep as ActiveComboStep].activeWindow
         : [1, 0];
     const isAttackActiveHitWindow =
       this.attackTimer > 0 && attackProgress >= winStart && attackProgress <= winEnd;
@@ -629,6 +695,7 @@ export class CharacterController {
     if (this.attackTimer > 0) {
       if (this.comboStep === 2) return 'Attack2';
       if (this.comboStep === 3) return 'Attack3';
+      if (this.comboStep === 4) return 'Attack4';
       return 'Attack1';
     }
     if (isBlocking) return 'Block';
@@ -655,7 +722,7 @@ export class CharacterController {
       if (forwardInput < 0 && strafeInput === 0) return 'WalkBackward';
       if (forwardInput === 0 && strafeInput < 0) return 'StrafeLeft';
       if (forwardInput === 0 && strafeInput > 0) return 'StrafeRight';
-      if (sprint && horizSpeed > 8.2) return 'Sprint';
+      if (sprint && horizSpeed > 6.0) return 'Sprint';
       if (horizSpeed > 6.2) return 'Jog';
       return 'Walk';
     }

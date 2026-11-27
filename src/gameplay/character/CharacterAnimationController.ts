@@ -101,9 +101,10 @@ export class CharacterAnimationController {
         state === 'Attack1' ||
         state === 'Attack2' ||
         state === 'Attack3' ||
+        state === 'Attack4' ||
         state === 'JumpStart' ||
         state === 'HitReaction';
-      const blendDuration = isFastOneShot ? 0.1 : isFlight ? 0.28 : 0.2;
+      const blendDuration = isFastOneShot ? 0.09 : isFlight ? 0.28 : 0.2;
 
       if (prevAction && prevAction !== nextAction) {
         prevAction.fadeOut(blendDuration);
