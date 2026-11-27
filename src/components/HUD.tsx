@@ -9,6 +9,7 @@ interface HUDProps {
   hasWeapon: boolean;
   invisTimer: number;
   isGrimoireOpen: boolean;
+  hideKeyboardHints?: boolean;
   onRevive: () => void;
 }
 
@@ -20,6 +21,7 @@ export const HUD: React.FC<HUDProps> = ({
   hasWeapon,
   invisTimer,
   isGrimoireOpen,
+  hideKeyboardHints = false,
   onRevive,
 }) => {
   const isInvisible = invisTimer > 0;
@@ -215,45 +217,47 @@ export const HUD: React.FC<HUDProps> = ({
         </div>
       )}
 
-      {/* Bottom-center airborne flight hints & Grimoire summon prompt */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-        {isFlying && !isGrimoireOpen && !isDead && (
-          <div
-            style={{
-              padding: '6px 14px',
-              borderRadius: '999px',
-              background: 'rgba(10, 22, 40, 0.72)',
-              border: '1px solid rgba(56, 189, 248, 0.4)',
-              color: '#bae6fd',
-              fontSize: '12px',
-              fontWeight: 500,
-              backdropFilter: 'blur(8px)',
-            }}
-          >
-            WASD Fly &nbsp;•&nbsp; Space Ascend &nbsp;•&nbsp; C Descend &nbsp;•&nbsp; Shift Boost
-          </div>
-        )}
+      {/* Bottom-center airborne flight hints & Grimoire summon prompt (hidden when mobile touch pad is visible) */}
+      {!hideKeyboardHints && (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+          {isFlying && !isGrimoireOpen && !isDead && (
+            <div
+              style={{
+                padding: '6px 14px',
+                borderRadius: '999px',
+                background: 'rgba(10, 22, 40, 0.72)',
+                border: '1px solid rgba(56, 189, 248, 0.4)',
+                color: '#bae6fd',
+                fontSize: '12px',
+                fontWeight: 500,
+                backdropFilter: 'blur(8px)',
+              }}
+            >
+              WASD Fly &nbsp;•&nbsp; Space Ascend &nbsp;•&nbsp; C Descend &nbsp;•&nbsp; Shift Boost
+            </div>
+          )}
 
-        {!isDead && (
-          <div
-            style={{
-              padding: '7px 16px',
-              borderRadius: '999px',
-              background: 'rgba(15, 23, 42, 0.68)',
-              border: '1px solid rgba(255, 255, 255, 0.16)',
-              color: '#cbd5e1',
-              fontSize: '12px',
-              fontWeight: 500,
-              letterSpacing: '0.03em',
-              backdropFilter: 'blur(8px)',
-            }}
-          >
-            {isGrimoireOpen
-              ? 'Click a card to cast  •  Press G or Esc to close'
-              : 'Press [G] to Summon Grimoire'}
-          </div>
-        )}
-      </div>
+          {!isDead && (
+            <div
+              style={{
+                padding: '7px 16px',
+                borderRadius: '999px',
+                background: 'rgba(15, 23, 42, 0.68)',
+                border: '1px solid rgba(255, 255, 255, 0.16)',
+                color: '#cbd5e1',
+                fontSize: '12px',
+                fontWeight: 500,
+                letterSpacing: '0.03em',
+                backdropFilter: 'blur(8px)',
+              }}
+            >
+              {isGrimoireOpen
+                ? 'Click a card to cast  •  Press G or Esc to close'
+                : 'Press [G] to Summon Grimoire'}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

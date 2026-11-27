@@ -173,9 +173,10 @@ export function Player({
               std.roughness = 0.25;
               std.envMapIntensity = 0.4;
             } else if (isFace) {
-              std.envMapIntensity = 0.24;
+              std.color.set('#f7d8c8');
+              std.envMapIntensity = 0.22;
               std.roughness = 0.92;
-              if (std.aoMap) std.aoMapIntensity = 0.8;
+              if (std.aoMap) std.aoMapIntensity = 0.85;
             } else {
               std.envMapIntensity = 0.45;
               std.roughness = Math.max(std.roughness ?? 0.72, 0.72);
@@ -621,19 +622,15 @@ export function Player({
         <meshBasicMaterial color="#67e8f9" transparent opacity={0.78} side={THREE.DoubleSide} />
       </mesh>
 
-      {/* Flight Wind / Aura Effect */}
-      <group ref={auraGroupRef} visible={false} position={[0, 1.05, 0]}>
+      {/* Flight Wind / Aura Effect (framed low around feet/lower coat so body & face stay clear) */}
+      <group ref={auraGroupRef} visible={false} position={[0, 0.35, 0]}>
         <mesh rotation={[Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[1.15, 0.04, 8, 32]} />
-          <meshBasicMaterial color="#38bdf8" transparent opacity={0.75} />
+          <torusGeometry args={[1.05, 0.032, 8, 32]} />
+          <meshBasicMaterial color="#38bdf8" transparent opacity={0.45} />
         </mesh>
-        <mesh rotation={[Math.PI / 3, 0.4, 0]}>
-          <torusGeometry args={[1.38, 0.03, 8, 32]} />
-          <meshBasicMaterial color="#a5f3fc" transparent opacity={0.55} />
-        </mesh>
-        <mesh>
-          <sphereGeometry args={[1.1, 16, 16]} />
-          <meshBasicMaterial color="#38bdf8" transparent opacity={0.12} depthWrite={false} />
+        <mesh position={[0, 0.18, 0]} rotation={[Math.PI / 2.2, 0.25, 0]}>
+          <torusGeometry args={[1.22, 0.024, 8, 32]} />
+          <meshBasicMaterial color="#a5f3fc" transparent opacity={0.32} />
         </mesh>
       </group>
     </group>

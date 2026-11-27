@@ -21,6 +21,7 @@ export function App() {
   const [hasWeapon, setHasWeapon] = useState(false);
   const [invisTimer, setInvisTimer] = useState(0);
   const [isGrimoireOpen, setIsGrimoireOpen] = useState(false);
+  const [isTouchVisible, setIsTouchVisible] = useState(false);
   const [, setPointerLocked] = useState(false);
 
   
@@ -226,6 +227,7 @@ export function App() {
         hasWeapon={hasWeapon}
         invisTimer={invisTimer}
         isGrimoireOpen={isGrimoireOpen}
+        hideKeyboardHints={isTouchVisible}
         onRevive={handleRevive}
       />
       <MobileControls
@@ -233,6 +235,7 @@ export function App() {
         isFlying={isFlying}
         hasWeapon={hasWeapon}
         isGrimoireOpen={isGrimoireOpen || isDead}
+        onVisibilityChange={setIsTouchVisible}
         onToggleGrimoire={() => {
           if (!isDead) setIsGrimoireOpen((prev) => !prev);
         }}
