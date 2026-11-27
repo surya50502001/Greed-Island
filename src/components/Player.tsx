@@ -619,7 +619,7 @@ export function Player({
 
       if (step.comboStep === 3) {
         const p = step.attackProgress;
-        const spinP = Math.max(0, Math.min(1, (p - 0.16) / 0.62));
+        const spinP = Math.max(0, Math.min(1, (p - 0.14) / 0.56));
         const eased = spinP < 0.5 ? 2 * spinP * spinP : 1 - Math.pow(-2 * spinP + 2, 2) / 2;
         instantSpinY = eased * Math.PI * 2;
       } else if (step.state === 'HitReaction') {
@@ -627,7 +627,7 @@ export function Player({
       } else if (step.state === 'Land') {
         targetTiltX = 0.14;
       } else if (step.state === 'Sprint') {
-        targetTiltX = 0.04;
+        targetTiltX = 0.08;
       }
 
       const postureLerp = 1 - Math.exp(-14 * dt);
@@ -862,10 +862,28 @@ export function Player({
       }
     }
 
-    // Over-the-shoulder third-person follow camera
+    // Over-the-shoulder third-person follow camera (with dynamic sprint FOV & pull-back)
     const yaw = camYawRef.current;
     const pitch = camPitchRef.current;
-    const camDist = isFlying && step.horizSpeed > 18 ? 4.6 : 3.7;
+    const isSprintingNow = step.state === 'Sprint' && step.horizSpeed > 8.0;
+    const camDist =
+      isFlying && step.horizSpeed > 18
+        ? 4.6
+        : isSprintingNow
+          ? 4.15
+          : 3.7;
+    if (camera instanceof THREE.PerspectiveCamera) {
+      const targetFov =
+        isFlying && step.horizSpeed > 18
+          ? 70
+          : isSprintingNow
+            ? 68
+            : 60;
+      if (Math.abs(camera.fov - targetFov) > 0.05) {
+        camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 1 - Math.exp(-8 * rawDt));
+        camera.updateProjectionMatrix();
+      }
+    }
     const rightX = Math.cos(yaw);
     const rightZ = -Math.sin(yaw);
     const shoulderOffset = 0.58;

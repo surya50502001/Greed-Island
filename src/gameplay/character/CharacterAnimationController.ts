@@ -104,7 +104,7 @@ export class CharacterAnimationController {
         state === 'Attack4' ||
         state === 'JumpStart' ||
         state === 'HitReaction';
-      const blendDuration = isFastOneShot ? 0.09 : isFlight ? 0.28 : 0.2;
+      const blendDuration = isFastOneShot ? 0.065 : isFlight ? 0.28 : 0.16;
 
       if (prevAction && prevAction !== nextAction) {
         prevAction.fadeOut(blendDuration);
@@ -139,7 +139,7 @@ export class CharacterAnimationController {
       const rate = THREE.MathUtils.clamp(horizSpeed / 4.6, 0.55, 1.4);
       nextAction.timeScale = this.currentReverse ? -rate : rate;
     } else if (resolved.clipName === 'Run') {
-      const rate = THREE.MathUtils.clamp(horizSpeed / 9.8, 0.72, 1.45);
+      const rate = THREE.MathUtils.clamp(horizSpeed / 11.4, 0.78, 1.38);
       nextAction.timeScale = rate;
     } else if (resolved.clipName === 'StrafeLeft' || resolved.clipName === 'StrafeRight') {
       nextAction.timeScale = THREE.MathUtils.clamp(horizSpeed / 4.4, 0.65, 1.35);

@@ -34,12 +34,12 @@ export interface ComboAttackSpec {
 export const COMBO_SPECS: Record<ActiveComboStep, ComboAttackSpec> = {
   1: {
     name: 'Quick Cross Slash',
-    duration: 0.4,
-    activeWindow: [0.24, 0.6],
+    duration: 0.44,
+    activeWindow: [0.24, 0.64],
     bufferStart: 0.22,
     chainWindow: 0.72,
-    cooldown: 0.06,
-    lunge: 3.0,
+    cooldown: 0.05,
+    lunge: 3.4,
     damage: 22,
     knockback: 12,
     reach: 4.2,
@@ -47,12 +47,12 @@ export const COMBO_SPECS: Record<ActiveComboStep, ComboAttackSpec> = {
   },
   2: {
     name: 'Reverse Slash',
-    duration: 0.42,
-    activeWindow: [0.24, 0.62],
+    duration: 0.44,
+    activeWindow: [0.24, 0.64],
     bufferStart: 0.22,
     chainWindow: 0.72,
-    cooldown: 0.06,
-    lunge: 3.4,
+    cooldown: 0.05,
+    lunge: 3.8,
     damage: 26,
     knockback: 14,
     reach: 4.4,
@@ -60,12 +60,12 @@ export const COMBO_SPECS: Record<ActiveComboStep, ComboAttackSpec> = {
   },
   3: {
     name: 'Spinning Crescent',
-    duration: 0.54,
-    activeWindow: [0.24, 0.72],
+    duration: 0.58,
+    activeWindow: [0.22, 0.74],
     bufferStart: 0.26,
     chainWindow: 0.78,
-    cooldown: 0.08,
-    lunge: 4.0,
+    cooldown: 0.07,
+    lunge: 4.4,
     damage: 32,
     knockback: 16,
     reach: 4.8,
@@ -73,12 +73,12 @@ export const COMBO_SPECS: Record<ActiveComboStep, ComboAttackSpec> = {
   },
   4: {
     name: 'Arcane Breaker',
-    duration: 0.72,
-    activeWindow: [0.4, 0.68],
+    duration: 0.74,
+    activeWindow: [0.38, 0.68],
     bufferStart: 1.0,
     chainWindow: 0,
-    cooldown: 0.36,
-    lunge: 5.4,
+    cooldown: 0.34,
+    lunge: 5.8,
     damage: 52,
     knockback: 24,
     reach: 5.2,
@@ -531,9 +531,9 @@ export class CharacterController {
         if (isPureBackward) {
           targetSpeed = 3.8;
         } else if (isPureStrafe) {
-          targetSpeed = input.sprint ? 6.8 : 4.6;
+          targetSpeed = input.sprint ? 7.6 : 4.6;
         } else if (input.sprint) {
-          targetSpeed = 11.8;
+          targetSpeed = 13.4;
         } else if (hasWeapon) {
           targetSpeed = 6.2;
         } else {
@@ -546,7 +546,7 @@ export class CharacterController {
 
       const targetVx = dodgeDirX * targetSpeed;
       const targetVz = dodgeDirZ * targetSpeed;
-      const accelRate = this.grounded ? (hasMoveInput ? 10.5 : 8.5) : 3.5;
+      const accelRate = this.grounded ? (hasMoveInput ? (input.sprint ? 12.5 : 10.5) : 8.5) : 3.5;
 
       this.velocity.x = THREE.MathUtils.lerp(
         this.velocity.x,
