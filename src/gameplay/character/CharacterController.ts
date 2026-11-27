@@ -362,13 +362,13 @@ export class CharacterController {
         if (isPureBackward) {
           targetSpeed = 3.8;
         } else if (isPureStrafe) {
-          targetSpeed = input.sprint ? 6.8 : 4.6;
+          targetSpeed = input.sprint ? 7.2 : 4.6;
         } else if (input.sprint) {
-          targetSpeed = 11.8;
+          targetSpeed = 12.5;
         } else if (hasWeapon) {
-          targetSpeed = 6.2;
+          targetSpeed = 5.5;
         } else {
-          targetSpeed = 4.8;
+          targetSpeed = 4.6;
         }
       }
 
@@ -525,11 +525,11 @@ export class CharacterController {
     if (this.landRecoveryTimer > 0) return 'Land';
 
     if (horizSpeed > 0.35) {
-      if (this.startMovingTimer > 0 && horizSpeed < 3.2) return 'StartMoving';
       if (forwardInput < 0 && strafeInput === 0) return 'WalkBackward';
       if (forwardInput === 0 && strafeInput < 0) return 'StrafeLeft';
       if (forwardInput === 0 && strafeInput > 0) return 'StrafeRight';
-      if (sprint && horizSpeed > 8.2) return 'Sprint';
+      if (sprint && horizSpeed > 2.0) return 'Sprint';
+      if (this.startMovingTimer > 0 && horizSpeed < 3.0) return 'StartMoving';
       if (horizSpeed > 6.2) return 'Jog';
       return 'Walk';
     }

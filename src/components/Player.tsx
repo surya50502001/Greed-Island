@@ -6,7 +6,10 @@ import { getGroundHeight } from '../world/terrain';
 import { EnemyEntity } from './Enemies';
 import { CharacterController } from '../gameplay/character/CharacterController';
 import { CharacterAnimationController } from '../gameplay/character/CharacterAnimationController';
-import { buildAdventurerAnimationClips } from '../gameplay/character/HumanAnimationClips';
+import {
+  buildAdventurerAnimationClips,
+  buildHumanAnimationClips,
+} from '../gameplay/character/HumanAnimationClips';
 import {
   DEFAULT_CHARACTER_MODEL_URL,
   getMissingStatesForClips,
@@ -56,6 +59,7 @@ export function Player({
 }: PlayerProps) {
   const { camera, gl } = useThree();
   const { scene, animations } = useGLTF(modelUrl);
+  const animSrc = useGLTF('/models/animations_mixamo.glb');
 
   const groupRef = useRef<THREE.Group>(null);
   const tiltGroupRef = useRef<THREE.Group>(null);
@@ -66,14 +70,19 @@ export function Player({
 
   const { generatedClips, mixer, actions } = useMemo(() => {
     const hasNativeLocomotion = animations.some((c) => c.name === 'Walk' || c.name === 'Run');
-    const clips = hasNativeLocomotion ? animations : buildAdventurerAnimationClips(scene);
+    const isMixamoStyle = Boolean(scene.getObjectByName('LeftArm') || scene.getObjectByName('Hips'));
+    const clips = hasNativeLocomotion
+      ? animations
+      : isMixamoStyle && scene.getObjectByName('LeftArm')
+        ? buildHumanAnimationClips(scene, animSrc.scene, animSrc.animations)
+        : buildAdventurerAnimationClips(scene);
     const m = new THREE.AnimationMixer(scene);
     const act: Record<string, THREE.AnimationAction | null> = {};
     for (const clip of clips) {
       act[clip.name] = m.clipAction(clip);
     }
     return { generatedClips: clips, mixer: m, actions: act };
-  }, [scene, animations]);
+  }, [scene, animations, animSrc.scene, animSrc.animations]);
 
   const controllerRef = useRef<CharacterController>(new CharacterController(0, 0));
   const animControllerRef = useRef<CharacterAnimationController>(
@@ -425,7 +434,7 @@ export function Player({
     animControllerRef.current.update(step.state, step.horizSpeed, actions);
     mixer.update(dt);
 
-    // Keep feet grounded on terrain/platforms during grounded animation states
+    // Keep feet from clipping underground while preserving natural airborne stride & hip bounce during Run/Sprint
     if (modelRef.current && groupRef.current && step.grounded && step.state !== 'Death') {
       const feet = footBonesRef.current;
       if (feet.length > 0) {
@@ -437,7 +446,20 @@ export function Player({
           if (footPosRef.current.y < minFootY) minFootY = footPosRef.current.y;
         }
         if (minFootY < Infinity) {
-          modelRef.current.position.y += footClearanceRef.current - minFootY;
+          const isRunning = step.state === 'Sprint' || step.state === 'Jog';
+          if (isRunning) {
+            if (minFootY < footClearanceRef.current) {
+              modelRef.current.position.y += footClearanceRef.current - minFootY;
+            } else {
+              modelRef.current.position.y = THREE.MathUtils.lerp(
+                modelRef.current.position.y,
+                modelOffsetY,
+                1 - Math.exp(-14 * dt)
+              );
+            }
+          } else {
+            modelRef.current.position.y += footClearanceRef.current - minFootY;
+          }
         }
       }
     } else if (modelRef.current && !step.grounded) {
@@ -616,3 +638,4 @@ export function Player({
 }
 
 useGLTF.preload(DEFAULT_CHARACTER_MODEL_URL);
+useGLTF.preload('/models/animations_mixamo.glb');
