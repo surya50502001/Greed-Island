@@ -20,3 +20,35 @@ body,
 canvas {
   display: block;
 }
+
+@keyframes floatDamagePop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -20%) scale(0.75);
+  }
+  18% {
+    opacity: 1;
+    transform: translate(-50%, -55%) scale(1.18);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -175%) scale(0.92);
+  }
+}
+
+.floating-dmg {
+  animation: floatDamagePop 0.65s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes comboHitPop {
+  0% {
+    transform: skewX(-10deg) scale(1.26);
+  }
+  100% {
+    transform: skewX(-10deg) scale(1);
+  }
+}
+
+.combo-callout {
+  animation: comboHitPop 0.18s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}

@@ -23,7 +23,8 @@ export function Grimoire({
   onActivateCard,
   onClose,
 }: GrimoireProps) {
-  const { camera } = useThree();
+  const { camera, gl, scene } = useThree();
+  const hasPrewarmedRef = useRef(false);
 
   const rootRef = useRef<THREE.Group>(null);
   const bookGroupRef = useRef<THREE.Group>(null);
@@ -47,6 +48,20 @@ export function Grimoire({
   const camDir = useRef(new THREE.Vector3());
   const camUp = useRef(new THREE.Vector3());
   const targetPos = useRef(new THREE.Vector3());
+
+  // Pre-compile Grimoire shaders once in background after mount so pressing G is instant
+  useEffect(() => {
+    if (hasPrewarmedRef.current || !rootRef.current) return;
+    hasPrewarmedRef.current = true;
+    const root = rootRef.current;
+    const prevVisible = root.visible;
+    const prevScale = root.scale.x;
+    root.visible = true;
+    root.scale.setScalar(0.0001);
+    gl.compile(scene, camera);
+    root.visible = prevVisible;
+    root.scale.setScalar(prevScale);
+  }, [gl, scene, camera]);
 
   // Reset cursor and internal activation state when closed
   useEffect(() => {
@@ -225,10 +240,6 @@ export function Grimoire({
 
   return (
     <group ref={rootRef} visible={false}>
-      {/* Warm arcane illumination on book & cards */}
-      <pointLight position={[0, 0.5, 0.9]} color="#7dd3fc" intensity={3.2} distance={5} />
-      <pointLight position={[0, -0.2, 0.4]} color="#c084fc" intensity={2.0} distance={4} />
-
       {/* Glowing Rune Circle */}
       <group ref={runeRingRef} position={[0, -0.38, -0.15]} rotation={[-0.35, 0, 0]}>
         <mesh>

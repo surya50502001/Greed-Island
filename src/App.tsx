@@ -6,9 +6,15 @@ import { CardId, INVISIBILITY_DURATION, PLAYER_MAX_HP } from './types/game';
 import { getGroundHeight } from './world/terrain';
 import { World } from './components/World';
 import { createInitialEnemies, Enemies, EnemyEntity } from './components/Enemies';
-import { Player, PlayerCombatBridge, PlayerTouchBridge } from './components/Player';
+import {
+  FloatingDamageEvent,
+  Player,
+  PlayerCombatBridge,
+  PlayerTouchBridge,
+} from './components/Player';
+import { CombatVFX, CombatVFXHandle } from './components/CombatVFX';
 import { Grimoire } from './components/Grimoire';
-import { HUD } from './components/HUD';
+import { ActiveDamageNumber, HUD } from './components/HUD';
 import { MobileControls } from './components/MobileControls';
 import {
   applyPlayerDamage,
@@ -21,6 +27,7 @@ export function App() {
   const [hasWeapon, setHasWeapon] = useState(false);
   const [invisTimer, setInvisTimer] = useState(0);
   const [isGrimoireOpen, setIsGrimoireOpen] = useState(false);
+  const [isTouchVisible, setIsTouchVisible] = useState(false);
   const [, setPointerLocked] = useState(false);
 
   
@@ -30,7 +37,45 @@ export function App() {
   const enemiesRef = useRef<EnemyEntity[]>(createInitialEnemies());
   const combatBridgeRef = useRef<PlayerCombatBridge | null>(null);
   const touchBridgeRef = useRef<PlayerTouchBridge | null>(null);
+  const vfxRef = useRef<CombatVFXHandle | null>(null);
   const lastDamageTimeRef = useRef<number>(0);
+  const dmgIdRef = useRef<number>(1);
+  const [damageNumbers, setDamageNumbers] = useState<ActiveDamageNumber[]>([]);
+  const [comboState, setComboState] = useState<{
+    count: number;
+    step: number;
+    attackName: string;
+    timer: number;
+  }>({ count: 0, step: 0, attackName: '', timer: 0 });
+
+  const handleDamageNumber = useCallback((ev: FloatingDamageEvent) => {
+    const id = dmgIdRef.current++;
+    setDamageNumbers((prev) => [...prev.slice(-9), { ...ev, id }]);
+    window.setTimeout(() => {
+      setDamageNumbers((prev) => prev.filter((item) => item.id !== id));
+    }, 680);
+  }, []);
+
+  const handleComboHit = useCallback((comboStep: number, attackName: string) => {
+    setComboState((prev) => ({
+      count: prev.count + 1,
+      step: comboStep,
+      attackName,
+      timer: 2.6,
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (comboState.timer <= 0) return;
+    const interval = window.setInterval(() => {
+      setComboState((prev) => {
+        const next = prev.timer - 0.1;
+        if (next <= 0) return { count: 0, step: 0, attackName: '', timer: 0 };
+        return { ...prev, timer: next };
+      });
+    }, 100);
+    return () => window.clearInterval(interval);
+  }, [comboState.timer > 0]);
 
   const isDead = playerHp <= 0;
 
@@ -121,7 +166,7 @@ export function App() {
         gl={{
           antialias: true,
           toneMapping: THREE.ACESFilmicToneMapping,
-          toneMappingExposure: 1.05,
+          toneMappingExposure: 0.95,
         }}
         camera={{ fov: 60, near: 0.1, far: 600, position: [0, 6, 10] }}
         onContextMenu={(e) => e.preventDefault()}
@@ -168,12 +213,12 @@ export function App() {
           />
         </Environment>
 
-        <ambientLight intensity={0.7} />
-        <hemisphereLight args={['#d8f3ff', '#6b8e63', 0.9]} />
+        <ambientLight intensity={0.46} />
+        <hemisphereLight args={['#d8f3ff', '#6b8e63', 0.68]} />
         <directionalLight
           castShadow
           position={[70, 95, 40]}
-          intensity={1.85}
+          intensity={1.55}
           shadow-bias={-0.0003}
           shadow-normalBias={0.03}
           shadow-mapSize-width={2048}
@@ -195,6 +240,7 @@ export function App() {
             isPlayerDead={isDead}
             onPlayerHit={handlePlayerHit}
           />
+          <CombatVFX ref={vfxRef} />
           <Player
             playerPosRef={playerPosRef}
             enemiesRef={enemiesRef}
@@ -205,6 +251,9 @@ export function App() {
             isDead={isDead}
             combatBridgeRef={combatBridgeRef}
             touchBridgeRef={touchBridgeRef}
+            vfxRef={vfxRef}
+            onDamageNumber={handleDamageNumber}
+            onComboHit={handleComboHit}
             onPointerLockChange={setPointerLocked}
           />
         </Suspense>
@@ -226,6 +275,12 @@ export function App() {
         hasWeapon={hasWeapon}
         invisTimer={invisTimer}
         isGrimoireOpen={isGrimoireOpen}
+        hideKeyboardHints={isTouchVisible}
+        damageNumbers={damageNumbers}
+        comboCount={comboState.count}
+        comboStep={comboState.step}
+        comboAttackName={comboState.attackName}
+        comboTimer={comboState.timer}
         onRevive={handleRevive}
       />
       <MobileControls
@@ -233,6 +288,7 @@ export function App() {
         isFlying={isFlying}
         hasWeapon={hasWeapon}
         isGrimoireOpen={isGrimoireOpen || isDead}
+        onVisibilityChange={setIsTouchVisible}
         onToggleGrimoire={() => {
           if (!isDead) setIsGrimoireOpen((prev) => !prev);
         }}

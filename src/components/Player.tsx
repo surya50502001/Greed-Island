@@ -4,17 +4,27 @@ import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { getGroundHeight } from '../world/terrain';
 import { EnemyEntity } from './Enemies';
-import { CharacterController } from '../gameplay/character/CharacterController';
+import { CharacterController, COMBO_SPECS, ActiveComboStep } from '../gameplay/character/CharacterController';
 import { CharacterAnimationController } from '../gameplay/character/CharacterAnimationController';
-import {
-  buildAdventurerAnimationClips,
-  buildHumanAnimationClips,
-} from '../gameplay/character/HumanAnimationClips';
+import { buildAdventurerAnimationClips } from '../gameplay/character/HumanAnimationClips';
 import {
   DEFAULT_CHARACTER_MODEL_URL,
   getMissingStatesForClips,
 } from '../gameplay/character/CharacterStates';
-import { PLAYER_ATTACK_DAMAGE } from '../gameplay/combat/HealthSystem';
+import { EnergySword } from './EnergySword';
+import {
+  CombatVFXHandle,
+  createAnimeSlashMaterial,
+  createCrescentArcGeometry,
+} from './CombatVFX';
+
+export interface FloatingDamageEvent {
+  x: number;
+  y: number;
+  amount: number;
+  isFinisher: boolean;
+  comboStep: number;
+}
 
 export interface PlayerTouchBridge {
   setMove: (x: number, y: number) => void;
@@ -41,7 +51,26 @@ interface PlayerProps {
   isDead: boolean;
   combatBridgeRef?: React.MutableRefObject<PlayerCombatBridge | null>;
   touchBridgeRef?: React.MutableRefObject<PlayerTouchBridge | null>;
+  vfxRef?: React.RefObject<CombatVFXHandle | null>;
+  onDamageNumber?: (ev: FloatingDamageEvent) => void;
+  onComboHit?: (comboStep: number, attackName: string) => void;
   onPointerLockChange: (locked: boolean) => void;
+}
+
+function pointToSegmentDistXZ(
+  px: number,
+  pz: number,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number
+): number {
+  const abx = bx - ax;
+  const abz = bz - az;
+  const lenSq = abx * abx + abz * abz;
+  if (lenSq < 1e-6) return Math.hypot(px - ax, pz - az);
+  const t = Math.max(0, Math.min(1, ((px - ax) * abx + (pz - az) * abz) / lenSq));
+  return Math.hypot(px - (ax + abx * t), pz - (az + abz * t));
 }
 
 export function Player({
@@ -55,34 +84,32 @@ export function Player({
   isDead,
   combatBridgeRef,
   touchBridgeRef,
+  vfxRef,
+  onDamageNumber,
+  onComboHit,
   onPointerLockChange,
 }: PlayerProps) {
   const { camera, gl } = useThree();
   const { scene, animations } = useGLTF(modelUrl);
-  const animSrc = useGLTF('/models/animations_mixamo.glb');
 
   const groupRef = useRef<THREE.Group>(null);
   const tiltGroupRef = useRef<THREE.Group>(null);
   const modelRef = useRef<THREE.Group>(null);
   const slashTrailRef = useRef<THREE.Mesh>(null);
+  const slashAuraRef = useRef<THREE.Mesh>(null);
   const auraGroupRef = useRef<THREE.Group>(null);
   const weaponGroupRef = useRef<THREE.Group>(null);
 
   const { generatedClips, mixer, actions } = useMemo(() => {
     const hasNativeLocomotion = animations.some((c) => c.name === 'Walk' || c.name === 'Run');
-    const isMixamoStyle = Boolean(scene.getObjectByName('LeftArm') || scene.getObjectByName('Hips'));
-    const clips = hasNativeLocomotion
-      ? animations
-      : isMixamoStyle && scene.getObjectByName('LeftArm')
-        ? buildHumanAnimationClips(scene, animSrc.scene, animSrc.animations)
-        : buildAdventurerAnimationClips(scene);
+    const clips = hasNativeLocomotion ? animations : buildAdventurerAnimationClips(scene);
     const m = new THREE.AnimationMixer(scene);
     const act: Record<string, THREE.AnimationAction | null> = {};
     for (const clip of clips) {
       act[clip.name] = m.clipAction(clip);
     }
     return { generatedClips: clips, mixer: m, actions: act };
-  }, [scene, animations, animSrc.scene, animSrc.animations]);
+  }, [scene, animations]);
 
   const controllerRef = useRef<CharacterController>(new CharacterController(0, 0));
   const animControllerRef = useRef<CharacterAnimationController>(
@@ -91,6 +118,7 @@ export function Player({
   const footBonesRef = useRef<THREE.Object3D[]>([]);
   const footPosRef = useRef(new THREE.Vector3());
   const footClearanceRef = useRef<number>(0.06);
+  const rightFingersRef = useRef<Array<{ bone: THREE.Object3D; restQuat: THREE.Quaternion; isThumb: boolean }>>([]);
 
   const [rightHandBone, setRightHandBone] = useState<THREE.Object3D | null>(null);
   const [handInvScale, setHandInvScale] = useState<number>(1);
@@ -101,6 +129,37 @@ export function Player({
   const camPitchRef = useRef(0.14);
   const isDraggingRef = useRef(false);
   const hitEnemiesThisAttackRef = useRef<Set<string>>(new Set());
+  const lastAttackIdRef = useRef<number>(0);
+  const finisherShockwaveFiredRef = useRef<boolean>(false);
+  const hitStopTimerRef = useRef<number>(0);
+  const shakeIntensityRef = useRef<number>(0);
+
+  // Reusable swept-blade & projection vectors (zero per-frame allocations)
+  const bladeBaseRef = useRef(new THREE.Vector3());
+  const bladeTipRef = useRef(new THREE.Vector3());
+  const prevBladeBaseRef = useRef(new THREE.Vector3());
+  const prevBladeTipRef = useRef(new THREE.Vector3());
+  const hasPrevBladeRef = useRef(false);
+  const impactPointRef = useRef(new THREE.Vector3());
+  const projVecRef = useRef(new THREE.Vector3());
+
+  const { crescentGeo, spinCrescentGeo, slashCoreMat, slashAuraMat } = useMemo(() => {
+    return {
+      crescentGeo: createCrescentArcGeometry(1.05, 0.78, Math.PI * 0.94, 36),
+      spinCrescentGeo: createCrescentArcGeometry(1.12, 0.94, Math.PI * 1.58, 44),
+      slashCoreMat: createAnimeSlashMaterial(),
+      slashAuraMat: createAnimeSlashMaterial(),
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      crescentGeo.dispose();
+      spinCrescentGeo.dispose();
+      slashCoreMat.dispose();
+      slashAuraMat.dispose();
+    };
+  }, [crescentGeo, spinCrescentGeo, slashCoreMat, slashAuraMat]);
 
   // Reusable camera vectors
   const camTargetRef = useRef(new THREE.Vector3());
@@ -153,57 +212,124 @@ export function Player({
 
     scene.updateMatrixWorld(true);
     let hand: THREE.Object3D | null = null;
-    const feet: THREE.Object3D[] = [];
+    let headBone: THREE.Object3D | null = null;
+    const toeBones: THREE.Object3D[] = [];
+    const ankleBones: THREE.Object3D[] = [];
     scene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         const mesh = obj as THREE.Mesh;
+        // Hide redundant lower-detail hair LODs that z-fight/blur bangs over the face
+        if (/NLOD[123]/i.test(mesh.name)) {
+          mesh.visible = false;
+          return;
+        }
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        for (const mat of materials) {
-          if (mat && (mat as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
-            const std = mat as THREE.MeshStandardMaterial;
-            std.envMapIntensity = 1.35;
-            if (std.aoMap) {
-              std.aoMapIntensity = 0.45;
+
+        const isEye = /Eye/i.test(mesh.name);
+        const isArray = Array.isArray(mesh.material);
+        const rawMats: THREE.Material[] = isArray
+          ? (mesh.material as THREE.Material[])
+          : [mesh.material as THREE.Material];
+        const tunedMats = rawMats.map((mat) => {
+          if (!mat) return mat;
+          const cloned = mat.clone();
+          if ((cloned as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+            const std = cloned as THREE.MeshStandardMaterial;
+            const isFace = /Face/i.test(std.name);
+            if (isEye) {
+              std.emissive = new THREE.Color('#38bdf8');
+              std.emissiveIntensity = 0.65;
+              std.roughness = 0.25;
+              std.envMapIntensity = 0.4;
+            } else if (isFace) {
+              std.color.set('#f7d8c8');
+              std.envMapIntensity = 0.22;
+              std.roughness = 0.92;
+              if (std.aoMap) std.aoMapIntensity = 0.85;
+            } else {
+              std.envMapIntensity = 0.45;
+              std.roughness = Math.max(std.roughness ?? 0.72, 0.72);
+              if (std.aoMap) std.aoMapIntensity = 0.6;
             }
             std.needsUpdate = true;
           }
-        }
+          return cloned;
+        });
+        mesh.material = isArray ? tunedMats : tunedMats[0];
       }
-      if (!hand && /^(RightHand|Hand\.R)(_\d+)?$/i.test(obj.name)) {
+      if (!hand && /^(RightHand|Hand\.R|Bip001[\s_]+R[\s_]+Hand)(_\d+)?$/i.test(obj.name)) {
         hand = obj;
       }
-      if (/^((Left|Right)(ToeBase|Foot)|Foot\.(L|R))(_\d+)?$/i.test(obj.name)) {
-        feet.push(obj);
+      if (!headBone && /^(mixamorig:?Head|Head|Bip001[\s_]+Head)(_\d+)?$/i.test(obj.name)) {
+        headBone = obj;
+      }
+      if (/^((Left|Right)ToeBase|Bip001[\s_]+(L|R)[\s_]+Toe0)(_\d+)?$/i.test(obj.name)) {
+        toeBones.push(obj);
+      } else if (/^((Left|Right)Foot|Foot\.(L|R)|Bip001[\s_]+(L|R)[\s_]+Foot)(_\d+)?$/i.test(obj.name)) {
+        ankleBones.push(obj);
       }
     });
-    footBonesRef.current = feet;
 
-    // Normalize model height to ~1.85 units and ground feet at y=0
-    const box = new THREE.Box3().setFromObject(scene);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const normScale = size.y > 0.01 ? 1.85 / size.y : 1;
-    setModelNormScale(normScale);
-    setModelOffsetY(-box.min.y * normScale);
+    const activeFeet = toeBones.length > 0 ? toeBones : ankleBones;
+    footBonesRef.current = activeFeet;
 
-    if (feet.length > 0) {
-      let minRestFootY = Infinity;
-      for (const f of feet) {
+    // Measure skeleton height in scene-local coordinates (independent of groupRef world Y!)
+    let normScale = 1;
+    let minLocalFootY = 0;
+    if (activeFeet.length > 0 && headBone) {
+      let minY = Infinity;
+      for (const f of activeFeet) {
         f.getWorldPosition(footPosRef.current);
-        if (footPosRef.current.y < minRestFootY) minRestFootY = footPosRef.current.y;
+        scene.worldToLocal(footPosRef.current);
+        if (footPosRef.current.y < minY) minY = footPosRef.current.y;
       }
-      if (minRestFootY < Infinity) {
-        footClearanceRef.current = Math.max(0.03, (minRestFootY - box.min.y) * normScale);
+      const headPos = new THREE.Vector3();
+      (headBone as THREE.Object3D).getWorldPosition(headPos);
+      scene.worldToLocal(headPos);
+      const span = headPos.y - minY;
+      if (span > 0.1) {
+        // Head bone sits ~0.18m below crown of hair, so 1.66m bone span ~= 1.84m total height
+        normScale = 1.66 / span;
+        minLocalFootY = minY;
       }
+    } else {
+      const box = new THREE.Box3().setFromObject(scene);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      normScale = size.y > 0.01 ? 1.85 / size.y : 1;
+      const rootWorld = new THREE.Vector3();
+      scene.getWorldPosition(rootWorld);
+      minLocalFootY = box.min.y - rootWorld.y;
     }
+
+    const clearance = toeBones.length > 0 ? 0.025 : 0.09;
+    footClearanceRef.current = clearance;
+    setModelNormScale(normScale);
+    setModelOffsetY(-minLocalFootY * normScale + clearance);
 
     if (hand) {
       const worldScale = new THREE.Vector3();
       (hand as THREE.Object3D).getWorldScale(worldScale);
-      setHandInvScale(1 / ((worldScale.x || 1) * normScale));
+      const modelWorldScale = new THREE.Vector3();
+      scene.getWorldScale(modelWorldScale);
+      const relScale = (worldScale.x || 1) / (modelWorldScale.x || 1);
+      setHandInvScale(1 / ((relScale || 1) * normScale));
       setRightHandBone(hand);
+
+      // Collect right-hand finger bones for natural weapon grip curling
+      const fingers: Array<{ bone: THREE.Object3D; restQuat: THREE.Quaternion; isThumb: boolean }> = [];
+      (hand as THREE.Object3D).traverse((child) => {
+        if (child === hand) return;
+        if (/R[\s_]*Finger\d+/i.test(child.name) && !/_end_/i.test(child.name)) {
+          fingers.push({
+            bone: child,
+            restQuat: child.quaternion.clone(),
+            isThumb: /Finger0/i.test(child.name),
+          });
+        }
+      });
+      rightFingersRef.current = fingers;
     }
   }, [scene, generatedClips, modelUrl]);
 
@@ -380,36 +506,33 @@ export function Player({
 
   const weaponElement = useMemo(() => {
     if (!hasWeapon) return null;
+    // Bip001 R Hand: +Y points toward fingertips, -Z is palm side, -X is thumb side (forward when arm hangs).
+    // Align grip inside palm (y=0.068, z=-0.022) with blade extending out thumb side (-X, tilted slightly forward).
+    const isBipedHand = rightHandBone ? /Bip001/i.test(rightHandBone.name) : false;
+    const pos: [number, number, number] = isBipedHand
+      ? [0.004 * handInvScale, 0.068 * handInvScale, -0.022 * handInvScale]
+      : [0, 0.08 * handInvScale, 0.04 * handInvScale];
+    const rot: [number, number, number] = isBipedHand
+      ? [0, 0, Math.PI / 2 + 0.16]
+      : [Math.PI / 2, 0, 0];
+
     return (
-      <group
+      <EnergySword
         ref={weaponGroupRef}
         scale={handInvScale}
-        position={[0, 0.08 * handInvScale, 0.04 * handInvScale]}
-        rotation={[Math.PI / 2, 0, 0]}
-      >
-        <mesh>
-          <cylinderGeometry args={[0.035, 0.035, 0.28, 8]} />
-          <meshStandardMaterial color="#1f2937" metalness={0.5} roughness={0.4} />
-        </mesh>
-        <mesh position={[0, 0.14, 0]}>
-          <boxGeometry args={[0.28, 0.06, 0.09]} />
-          <meshStandardMaterial color="#fbbf24" metalness={0.7} roughness={0.25} />
-        </mesh>
-        <mesh position={[0, 0.78, 0]}>
-          <boxGeometry args={[0.085, 1.24, 0.03]} />
-          <meshStandardMaterial
-            color="#67e8f9"
-            emissive="#06b6d4"
-            emissiveIntensity={2.2}
-            roughness={0.1}
-          />
-        </mesh>
-      </group>
+        position={pos}
+        rotation={rot}
+      />
     );
-  }, [hasWeapon, handInvScale]);
+  }, [hasWeapon, handInvScale, rightHandBone]);
 
   useFrame(({ clock }, delta) => {
-    const dt = Math.min(delta, 0.05);
+    const rawDt = Math.min(delta, 0.05);
+    let dt = rawDt;
+    if (hitStopTimerRef.current > 0) {
+      hitStopTimerRef.current = Math.max(0, hitStopTimerRef.current - rawDt);
+      dt = rawDt * 0.05;
+    }
     const ctrl = controllerRef.current;
 
     const step = ctrl.update(
@@ -434,7 +557,22 @@ export function Player({
     animControllerRef.current.update(step.state, step.horizSpeed, actions);
     mixer.update(dt);
 
-    // Keep feet from clipping underground while preserving natural airborne stride & hip bounce during Run/Sprint
+    // Curl right-hand finger bones naturally around the sword handle when summoned
+    if (rightFingersRef.current.length > 0) {
+      for (const f of rightFingersRef.current) {
+        f.bone.quaternion.copy(f.restQuat);
+        if (hasWeapon) {
+          if (f.isThumb) {
+            f.bone.rotateX(-0.52);
+            f.bone.rotateZ(-0.28);
+          } else {
+            f.bone.rotateX(-0.85);
+          }
+        }
+      }
+    }
+
+    // Keep feet grounded on terrain/platforms during grounded animation states
     if (modelRef.current && groupRef.current && step.grounded && step.state !== 'Death') {
       const feet = footBonesRef.current;
       if (feet.length > 0) {
@@ -446,15 +584,16 @@ export function Player({
           if (footPosRef.current.y < minFootY) minFootY = footPosRef.current.y;
         }
         if (minFootY < Infinity) {
-          const isRunning = step.state === 'Sprint' || step.state === 'Jog';
-          if (isRunning) {
+          const isSprinting = step.state === 'Sprint' || step.state === 'Jog';
+          if (isSprinting) {
+            // Allow airborne stride lift while still preventing feet from sinking below terrain
             if (minFootY < footClearanceRef.current) {
               modelRef.current.position.y += footClearanceRef.current - minFootY;
             } else {
               modelRef.current.position.y = THREE.MathUtils.lerp(
                 modelRef.current.position.y,
                 modelOffsetY,
-                1 - Math.exp(-14 * dt)
+                1 - Math.exp(-10 * dt)
               );
             }
           } else {
@@ -462,7 +601,7 @@ export function Player({
           }
         }
       }
-    } else if (modelRef.current && !step.grounded) {
+    } else if (modelRef.current && (!step.grounded || step.state === 'Death')) {
       modelRef.current.position.y = THREE.MathUtils.lerp(
         modelRef.current.position.y,
         modelOffsetY,
@@ -470,33 +609,37 @@ export function Player({
       );
     }
 
-    // Subtle posture layer for flight tilt, landing squash, hit stagger, & attack anticipation/recovery
+    // Subtle posture layer for flight tilt, landing squash, hit stagger, & Attack 3 world-yaw spin
+    // (Attack 1, 2, 4 body mechanics are driven 100% by the skeletal hierarchy to avoid rigid puppet twisting)
     if (tiltGroupRef.current) {
       let targetTiltX = step.flightTiltX;
       let targetTwistY = 0;
       let targetRollZ = step.flightRollZ;
+      let instantSpinY: number | null = null;
 
-      if (step.state === 'Attack') {
+      if (step.comboStep === 3) {
         const p = step.attackProgress;
-        targetTwistY = p < 0.24 ? -0.45 * (p / 0.24) : -0.45 + ((p - 0.24) / 0.76) * 1.15;
-        targetTiltX += 0.14 * Math.sin(p * Math.PI);
+        const spinP = Math.max(0, Math.min(1, (p - 0.16) / 0.62));
+        const eased = spinP < 0.5 ? 2 * spinP * spinP : 1 - Math.pow(-2 * spinP + 2, 2) / 2;
+        instantSpinY = eased * Math.PI * 2;
       } else if (step.state === 'HitReaction') {
         targetTiltX = -0.28 * Math.sin(step.hitReactionProgress * Math.PI);
       } else if (step.state === 'Land') {
         targetTiltX = 0.14;
+      } else if (step.state === 'Sprint') {
+        targetTiltX = 0.04;
       }
 
-      const postureLerp = 1 - Math.exp(-12 * dt);
+      const postureLerp = 1 - Math.exp(-14 * dt);
       tiltGroupRef.current.rotation.x = THREE.MathUtils.lerp(
         tiltGroupRef.current.rotation.x,
         targetTiltX,
         postureLerp
       );
-      tiltGroupRef.current.rotation.y = THREE.MathUtils.lerp(
-        tiltGroupRef.current.rotation.y,
-        targetTwistY,
-        postureLerp
-      );
+      tiltGroupRef.current.rotation.y =
+        instantSpinY !== null
+          ? instantSpinY
+          : THREE.MathUtils.lerp(tiltGroupRef.current.rotation.y, targetTwistY, postureLerp);
       tiltGroupRef.current.rotation.z = THREE.MathUtils.lerp(
         tiltGroupRef.current.rotation.z,
         targetRollZ,
@@ -504,20 +647,124 @@ export function Player({
       );
     }
 
-    // Weapon swing & hit detection synchronized with active attack frames
-    if (step.state === 'Attack') {
-      const p = step.attackProgress;
-      if (weaponGroupRef.current) {
-        weaponGroupRef.current.rotation.x = Math.PI / 2 - 0.9 + p * 1.9;
+    // Reset hit set & swept blade history whenever a new attack swing begins
+    if (step.attackId !== lastAttackIdRef.current) {
+      lastAttackIdRef.current = step.attackId;
+      hitEnemiesThisAttackRef.current.clear();
+      finisherShockwaveFiredRef.current = false;
+      hasPrevBladeRef.current = false;
+    }
+
+    // Weapon swing, crescent slash VFX, & swept-blade hit detection across 4-hit combo
+    // Keep weaponGroupRef rigidly locked to the palm; wrist motion comes from Hand.R bone.
+    if (weaponGroupRef.current) {
+      const isBipedHand = rightHandBone ? /Bip001/i.test(rightHandBone.name) : false;
+      if (isBipedHand) {
+        weaponGroupRef.current.rotation.set(0, 0, Math.PI / 2 + 0.16);
+      } else {
+        weaponGroupRef.current.rotation.set(Math.PI / 2, 0, 0);
       }
-      if (slashTrailRef.current) {
-        slashTrailRef.current.visible = step.isAttackActiveHitWindow;
-        slashTrailRef.current.rotation.z = -1.1 + p * 2.2;
+    }
+
+    if (step.comboStep > 0) {
+      const activeStep = step.comboStep as ActiveComboStep;
+      const spec = COMBO_SPECS[activeStep];
+      const p = step.attackProgress;
+
+      // Trigger Arcane Breaker ground shockwave at impact frame
+      if (activeStep === 4 && p >= 0.42 && !finisherShockwaveFiredRef.current) {
+        finisherShockwaveFiredRef.current = true;
+        impactPointRef.current.set(
+          ctrl.position.x + Math.sin(ctrl.yaw) * 2.1,
+          ctrl.position.y,
+          ctrl.position.z + Math.cos(ctrl.yaw) * 2.1
+        );
+        vfxRef?.current?.spawnFinisherShockwave(impactPointRef.current);
+        shakeIntensityRef.current = Math.max(shakeIntensityRef.current, 0.18);
+      }
+
+      const trailColor =
+        activeStep === 1
+          ? '#67e8f9'
+          : activeStep === 2
+            ? '#c084fc'
+            : activeStep === 3
+              ? '#fde047'
+              : '#fb923c';
+      const auraColor =
+        activeStep === 1
+          ? '#0ea5e9'
+          : activeStep === 2
+            ? '#8b5cf6'
+            : activeStep === 3
+              ? '#38bdf8'
+              : '#fde047';
+
+      const showTrail = step.isAttackActiveHitWindow;
+      const trailFade = showTrail
+        ? Math.sin(
+            ((p - spec.activeWindow[0]) / (spec.activeWindow[1] - spec.activeWindow[0])) * Math.PI
+          )
+        : 0;
+
+      if (slashTrailRef.current && slashAuraRef.current) {
+        slashTrailRef.current.visible = showTrail;
+        slashAuraRef.current.visible = showTrail;
+        const targetGeo = activeStep === 3 ? spinCrescentGeo : crescentGeo;
+        if (slashTrailRef.current.geometry !== targetGeo) {
+          slashTrailRef.current.geometry = targetGeo;
+          slashAuraRef.current.geometry = targetGeo;
+        }
+
+        slashCoreMat.uniforms.uColorCore.value.set(activeStep === 4 ? '#fef08a' : '#ffffff');
+        slashCoreMat.uniforms.uColorEdge.value.set(trailColor);
+        slashCoreMat.uniforms.uOpacity.value = Math.max(0.2, trailFade * 1.05);
+        slashCoreMat.uniforms.uTime.value = clock.getElapsedTime();
+
+        slashAuraMat.uniforms.uColorCore.value.set(trailColor);
+        slashAuraMat.uniforms.uColorEdge.value.set(auraColor);
+        slashAuraMat.uniforms.uOpacity.value = Math.max(0.1, trailFade * 0.55);
+        slashAuraMat.uniforms.uTime.value = clock.getElapsedTime();
+
+        if (activeStep === 1) {
+          slashTrailRef.current.position.set(0.06, 1.18, 0.72);
+          slashTrailRef.current.rotation.set(Math.PI / 2 + 0.38, -0.26, -1.15 + p * 2.2);
+          slashTrailRef.current.scale.setScalar(1.0);
+        } else if (activeStep === 2) {
+          slashTrailRef.current.position.set(0.06, 1.18, 0.72);
+          slashTrailRef.current.rotation.set(Math.PI / 2 - 0.38, 0.26, 1.15 - p * 2.2);
+          slashTrailRef.current.scale.setScalar(1.06);
+        } else if (activeStep === 3) {
+          slashTrailRef.current.position.set(0, 1.14, 0.18);
+          slashTrailRef.current.rotation.set(Math.PI / 2, 0.08, -p * Math.PI * 2.2);
+          slashTrailRef.current.scale.setScalar(1.18);
+        } else {
+          slashTrailRef.current.position.set(0.06, 1.24, 0.88);
+          slashTrailRef.current.rotation.set(0.18, Math.PI / 2, -1.35 + p * 2.4);
+          slashTrailRef.current.scale.setScalar(1.38);
+        }
+
+        slashAuraRef.current.position.copy(slashTrailRef.current.position);
+        slashAuraRef.current.rotation.copy(slashTrailRef.current.rotation);
+        slashAuraRef.current.scale.copy(slashTrailRef.current.scale).multiplyScalar(1.14);
+      }
+
+      // Compute actual world-space blade segment [base -> tip]
+      if (weaponGroupRef.current) {
+        weaponGroupRef.current.updateMatrixWorld(true);
+        bladeBaseRef.current.set(0, 0.18, 0).applyMatrix4(weaponGroupRef.current.matrixWorld);
+        bladeTipRef.current.set(0, 1.2, 0).applyMatrix4(weaponGroupRef.current.matrixWorld);
+      } else {
+        bladeBaseRef.current.copy(ctrl.position).add(new THREE.Vector3(0, 1.1, 0));
+        bladeTipRef.current
+          .copy(ctrl.position)
+          .add(new THREE.Vector3(Math.sin(ctrl.yaw) * 1.4, 1.1, Math.cos(ctrl.yaw) * 1.4));
       }
 
       if (step.isAttackActiveHitWindow) {
         const pFwdX = Math.sin(ctrl.yaw);
         const pFwdZ = Math.cos(ctrl.yaw);
+        const isFinisher = activeStep === 4;
 
         for (const enemy of enemiesRef.current) {
           if (!enemy.alive || hitEnemiesThisAttackRef.current.has(enemy.id)) continue;
@@ -525,31 +772,84 @@ export function Player({
           const dy = enemy.position.y - ctrl.position.y;
           const dz = enemy.position.z - ctrl.position.z;
           const dist = Math.hypot(dx, dz);
-          if (dist < 4.5 && Math.abs(dy) < 3.5) {
-            const dot = (dx * pFwdX + dz * pFwdZ) / (dist || 1);
-            if (dist < 2.2 || dot > 0.15) {
-              hitEnemiesThisAttackRef.current.add(enemy.id);
-              enemy.hitFlash = 0.22;
-              enemy.hp = Math.max(0, enemy.hp - PLAYER_ATTACK_DAMAGE);
-              const invD = 1 / (dist || 1);
-              enemy.knockbackX = dx * invD * 14;
-              enemy.knockbackZ = dz * invD * 14;
-              if (enemy.hp <= 0) {
-                enemy.alive = false;
-                enemy.chasing = false;
-                enemy.respawnTimer = 14;
+          if (Math.abs(dy) >= 3.5) continue;
+
+          // Swept blade collision distance in XZ
+          const currBladeDist = pointToSegmentDistXZ(
+            enemy.position.x,
+            enemy.position.z,
+            bladeBaseRef.current.x,
+            bladeBaseRef.current.z,
+            bladeTipRef.current.x,
+            bladeTipRef.current.z
+          );
+          let minBladeDist = currBladeDist;
+          if (hasPrevBladeRef.current) {
+            const sweptTipDist = pointToSegmentDistXZ(
+              enemy.position.x,
+              enemy.position.z,
+              prevBladeTipRef.current.x,
+              prevBladeTipRef.current.z,
+              bladeTipRef.current.x,
+              bladeTipRef.current.z
+            );
+            minBladeDist = Math.min(minBladeDist, sweptTipDist);
+          }
+
+          // Match visual crescent arc & actual blade reach while preventing hits behind player (except 360° Attack 3)
+          const dot = (dx * pFwdX + dz * pFwdZ) / (dist || 1);
+          const inFrontArc = spec.isAoe360 ? dist < spec.reach : (dist < spec.reach && (dot > -0.12 || dist < 1.35));
+          const bladeHit = minBladeDist < (isFinisher ? 2.15 : 1.75);
+
+          if (inFrontArc && (bladeHit || dist < spec.reach * 0.72)) {
+            hitEnemiesThisAttackRef.current.add(enemy.id);
+            enemy.hitFlash = isFinisher ? 0.3 : 0.22;
+            enemy.hp = Math.max(0, enemy.hp - spec.damage);
+            const invD = 1 / (dist || 1);
+            enemy.knockbackX = dx * invD * spec.knockback;
+            enemy.knockbackZ = dz * invD * spec.knockback;
+            if (enemy.hp <= 0) {
+              enemy.alive = false;
+              enemy.chasing = false;
+              enemy.respawnTimer = 14;
+            }
+
+            // Combat feedback: brief hit-stop, camera shake, pooled sparks, floating damage number
+            hitStopTimerRef.current = Math.max(hitStopTimerRef.current, isFinisher ? 0.068 : 0.03);
+            shakeIntensityRef.current = Math.max(shakeIntensityRef.current, isFinisher ? 0.22 : 0.085);
+            vfxRef?.current?.spawnHitImpact(
+              enemy.position,
+              dx * invD,
+              dz * invD,
+              trailColor,
+              isFinisher
+            );
+            onComboHit?.(activeStep, spec.name);
+
+            if (onDamageNumber) {
+              projVecRef.current.set(enemy.position.x, enemy.position.y + 1.5, enemy.position.z);
+              projVecRef.current.project(camera);
+              if (projVecRef.current.z < 1) {
+                onDamageNumber({
+                  x: (projVecRef.current.x * 0.5 + 0.5) * 100,
+                  y: (-projVecRef.current.y * 0.5 + 0.5) * 100,
+                  amount: spec.damage,
+                  isFinisher,
+                  comboStep: activeStep,
+                });
               }
             }
           }
         }
       }
+
+      prevBladeBaseRef.current.copy(bladeBaseRef.current);
+      prevBladeTipRef.current.copy(bladeTipRef.current);
+      hasPrevBladeRef.current = true;
     } else {
-      if (weaponGroupRef.current) {
-        weaponGroupRef.current.rotation.x = Math.PI / 2;
-      }
-      if (slashTrailRef.current) {
-        slashTrailRef.current.visible = false;
-      }
+      hasPrevBladeRef.current = false;
+      if (slashTrailRef.current) slashTrailRef.current.visible = false;
+      if (slashAuraRef.current) slashAuraRef.current.visible = false;
     }
 
     // Flight aura animation
@@ -586,7 +886,16 @@ export function Player({
     if (camY < terrainUnderCam) camY = terrainUnderCam;
 
     camPosRef.current.set(camX, camY, camZ);
-    camera.position.lerp(camPosRef.current, 1 - Math.exp(-18 * dt));
+    camera.position.lerp(camPosRef.current, 1 - Math.exp(-18 * rawDt));
+    if (shakeIntensityRef.current > 0.002) {
+      const s = shakeIntensityRef.current;
+      camera.position.x += (Math.random() - 0.5) * s;
+      camera.position.y += (Math.random() - 0.5) * s * 0.8;
+      camera.position.z += (Math.random() - 0.5) * s;
+      shakeIntensityRef.current *= Math.exp(-14 * rawDt);
+    } else {
+      shakeIntensityRef.current = 0;
+    }
     camera.lookAt(camTargetRef.current);
   });
 
@@ -607,30 +916,33 @@ export function Player({
 
       {rightHandBone && weaponElement && createPortal(weaponElement, rightHandBone)}
 
-      {/* Melee Swing Trail */}
+      {/* Anime Crescent Melee Slash Trail (GLSL core + additive energy wake) */}
       <mesh
         ref={slashTrailRef}
+        geometry={crescentGeo}
+        material={slashCoreMat}
         visible={false}
         position={[0, 1.25, 0.55]}
         rotation={[Math.PI / 2, 0, 0]}
-      >
-        <ringGeometry args={[1.1, 2.2, 24, 1, -Math.PI * 0.45, Math.PI * 0.9]} />
-        <meshBasicMaterial color="#67e8f9" transparent opacity={0.78} side={THREE.DoubleSide} />
-      </mesh>
+      />
+      <mesh
+        ref={slashAuraRef}
+        geometry={crescentGeo}
+        material={slashAuraMat}
+        visible={false}
+        position={[0, 1.25, 0.55]}
+        rotation={[Math.PI / 2, 0, 0]}
+      />
 
-      {/* Flight Wind / Aura Effect */}
-      <group ref={auraGroupRef} visible={false} position={[0, 1.05, 0]}>
+      {/* Flight Wind / Aura Effect (framed low around feet/lower coat so body & face stay clear) */}
+      <group ref={auraGroupRef} visible={false} position={[0, 0.35, 0]}>
         <mesh rotation={[Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[1.15, 0.04, 8, 32]} />
-          <meshBasicMaterial color="#38bdf8" transparent opacity={0.75} />
+          <torusGeometry args={[1.05, 0.032, 8, 32]} />
+          <meshBasicMaterial color="#38bdf8" transparent opacity={0.45} />
         </mesh>
-        <mesh rotation={[Math.PI / 3, 0.4, 0]}>
-          <torusGeometry args={[1.38, 0.03, 8, 32]} />
-          <meshBasicMaterial color="#a5f3fc" transparent opacity={0.55} />
-        </mesh>
-        <mesh>
-          <sphereGeometry args={[1.1, 16, 16]} />
-          <meshBasicMaterial color="#38bdf8" transparent opacity={0.12} depthWrite={false} />
+        <mesh position={[0, 0.18, 0]} rotation={[Math.PI / 2.2, 0.25, 0]}>
+          <torusGeometry args={[1.22, 0.024, 8, 32]} />
+          <meshBasicMaterial color="#a5f3fc" transparent opacity={0.32} />
         </mesh>
       </group>
     </group>
@@ -638,4 +950,3 @@ export function Player({
 }
 
 useGLTF.preload(DEFAULT_CHARACTER_MODEL_URL);
-useGLTF.preload('/models/animations_mixamo.glb');

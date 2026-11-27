@@ -14,6 +14,78 @@ export interface CharacterInputState {
   block: boolean;
 }
 
+export type ComboStep = 0 | 1 | 2 | 3 | 4;
+export type ActiveComboStep = 1 | 2 | 3 | 4;
+
+export interface ComboAttackSpec {
+  name: string;
+  duration: number;
+  activeWindow: [number, number];
+  bufferStart: number;
+  chainWindow: number;
+  cooldown: number;
+  lunge: number;
+  damage: number;
+  knockback: number;
+  reach: number;
+  isAoe360: boolean;
+}
+
+export const COMBO_SPECS: Record<ActiveComboStep, ComboAttackSpec> = {
+  1: {
+    name: 'Quick Cross Slash',
+    duration: 0.4,
+    activeWindow: [0.24, 0.6],
+    bufferStart: 0.22,
+    chainWindow: 0.72,
+    cooldown: 0.06,
+    lunge: 3.0,
+    damage: 22,
+    knockback: 12,
+    reach: 4.2,
+    isAoe360: false,
+  },
+  2: {
+    name: 'Reverse Slash',
+    duration: 0.42,
+    activeWindow: [0.24, 0.62],
+    bufferStart: 0.22,
+    chainWindow: 0.72,
+    cooldown: 0.06,
+    lunge: 3.4,
+    damage: 26,
+    knockback: 14,
+    reach: 4.4,
+    isAoe360: false,
+  },
+  3: {
+    name: 'Spinning Crescent',
+    duration: 0.54,
+    activeWindow: [0.24, 0.72],
+    bufferStart: 0.26,
+    chainWindow: 0.78,
+    cooldown: 0.08,
+    lunge: 4.0,
+    damage: 32,
+    knockback: 16,
+    reach: 4.8,
+    isAoe360: true,
+  },
+  4: {
+    name: 'Arcane Breaker',
+    duration: 0.72,
+    activeWindow: [0.4, 0.68],
+    bufferStart: 1.0,
+    chainWindow: 0,
+    cooldown: 0.36,
+    lunge: 5.4,
+    damage: 52,
+    knockback: 24,
+    reach: 5.2,
+    isAoe360: false,
+  },
+};
+
 export interface CharacterStepResult {
   state: CharacterLocomotionState;
   horizSpeed: number;
@@ -21,6 +93,8 @@ export interface CharacterStepResult {
   grounded: boolean;
   attackProgress: number;
   isAttackActiveHitWindow: boolean;
+  comboStep: ComboStep;
+  attackId: number;
   hitReactionProgress: number;
   isBlocking: boolean;
   flightTiltX: number;
@@ -54,14 +128,18 @@ export class CharacterController {
   private flightTakeoffTimer = 0;
   private flightLandTimer = 0;
 
-  // Combat, death & reaction timers
+  // 4-hit sword combo, death & reaction state
   private isDead = false;
   private attackTimer = 0;
+  private attackDuration = 0.36;
   private attackCooldown = 0;
+  private comboStep: ComboStep = 0;
+  private comboWindowTimer = 0;
+  private attackQueued = false;
+  private attackId = 0;
   private dodgeTimer = 0;
   private dodgeCooldown = 0;
   private hitReactionTimer = 0;
-  private readonly attackDuration = 0.42;
   private readonly dodgeDuration = 0.36;
 
   // Reusable math vectors & step result (zero per-frame allocations)
@@ -75,6 +153,8 @@ export class CharacterController {
     grounded: true,
     attackProgress: 0,
     isAttackActiveHitWindow: false,
+    comboStep: 0,
+    attackId: 0,
     hitReactionProgress: 0,
     isBlocking: false,
     flightTiltX: 0,
@@ -115,10 +195,9 @@ export class CharacterController {
   }
 
   public triggerAttack(hasWeapon: boolean, isGrimoireOpen: boolean): boolean {
-    if (this.isDead || !hasWeapon || isGrimoireOpen) return false;
+    if (this.isDead || !hasWeapon || isGrimoireOpen || this.prevIsFlying) return false;
     const input = this.readInputs(isGrimoireOpen);
     if (
-      this.attackCooldown > 0 ||
       this.hitReactionTimer > 0 ||
       this.dodgeTimer > 0 ||
       this.pendingJump ||
@@ -126,9 +205,47 @@ export class CharacterController {
     ) {
       return false;
     }
-    this.attackTimer = this.attackDuration;
-    this.attackCooldown = 0.48;
+
+    // If currently mid-swing, buffer the next combo hit during valid combo window
+    if (this.attackTimer > 0) {
+      const progress = 1 - this.attackTimer / this.attackDuration;
+      if (this.comboStep >= 1 && this.comboStep < 4) {
+        const spec = COMBO_SPECS[this.comboStep as ActiveComboStep];
+        if (progress >= spec.bufferStart) {
+          this.attackQueued = true;
+        }
+      }
+      return false;
+    }
+
+    if (this.attackCooldown > 0) return false;
+
+    this.startNextComboHit();
     return true;
+  }
+
+  private startNextComboHit(): void {
+    const nextStep: ActiveComboStep =
+      this.comboStep === 1 && this.comboWindowTimer > 0
+        ? 2
+        : this.comboStep === 2 && this.comboWindowTimer > 0
+          ? 3
+          : this.comboStep === 3 && this.comboWindowTimer > 0
+            ? 4
+            : 1;
+
+    const spec = COMBO_SPECS[nextStep];
+    this.comboStep = nextStep;
+    this.attackDuration = spec.duration;
+    this.attackTimer = spec.duration;
+    this.attackCooldown = spec.cooldown;
+    this.comboWindowTimer = spec.chainWindow;
+    this.attackQueued = false;
+    this.attackId += 1;
+
+    // Forward attack step momentum
+    this.velocity.x += Math.sin(this.yaw) * spec.lunge;
+    this.velocity.z += Math.cos(this.yaw) * spec.lunge;
   }
 
   public triggerDodge(isFlying: boolean, isGrimoireOpen: boolean): boolean {
@@ -137,22 +254,31 @@ export class CharacterController {
     this.dodgeTimer = this.dodgeDuration;
     this.dodgeCooldown = 0.7;
     this.attackTimer = 0;
+    this.attackQueued = false;
+    this.comboStep = 0;
+    this.comboWindowTimer = 0;
     return true;
   }
 
   public triggerHitReaction(hasWeapon: boolean, isGrimoireOpen: boolean): void {
     if (this.isDead) return;
     const input = this.readInputs(isGrimoireOpen);
-    if (hasWeapon && input.block) return; // Blocked!
+    if (hasWeapon && input.block) return;
     if (this.hitReactionTimer > 0 || this.dodgeTimer > 0) return;
     this.hitReactionTimer = 0.35;
     this.attackTimer = 0;
+    this.attackQueued = false;
+    this.comboStep = 0;
+    this.comboWindowTimer = 0;
   }
 
   public triggerDeath(): void {
     if (this.isDead) return;
     this.isDead = true;
     this.attackTimer = 0;
+    this.attackQueued = false;
+    this.comboStep = 0;
+    this.comboWindowTimer = 0;
     this.dodgeTimer = 0;
     this.hitReactionTimer = 0;
     this.pendingJump = false;
@@ -180,6 +306,9 @@ export class CharacterController {
     this.flightLandTimer = 0;
     this.attackTimer = 0;
     this.attackCooldown = 0;
+    this.comboStep = 0;
+    this.comboWindowTimer = 0;
+    this.attackQueued = false;
     this.dodgeTimer = 0;
     this.dodgeCooldown = 0;
     this.hitReactionTimer = 0;
@@ -197,6 +326,10 @@ export class CharacterController {
         this.jumpStartHoldTimer = 0;
         break;
       case 'Attack':
+      case 'Attack1':
+      case 'Attack2':
+      case 'Attack3':
+      case 'Attack4':
         this.attackTimer = 0;
         break;
       case 'Dodge':
@@ -253,9 +386,34 @@ export class CharacterController {
     const safeDt = Math.min(dt, 0.05);
     const input = this.readInputs(isGrimoireOpen);
 
+    // Clear combo if weapon was unsummoned or player started flying/blocking
+    if (!hasWeapon || isFlying || input.block) {
+      this.comboStep = 0;
+      this.comboWindowTimer = 0;
+      this.attackQueued = false;
+      if (!hasWeapon) this.attackTimer = 0;
+    }
+
     // Update timers
     if (this.attackCooldown > 0) this.attackCooldown = Math.max(0, this.attackCooldown - safeDt);
-    if (this.attackTimer > 0) this.attackTimer = Math.max(0, this.attackTimer - safeDt);
+    if (this.attackTimer > 0) {
+      this.attackTimer = Math.max(0, this.attackTimer - safeDt);
+      if (this.attackTimer === 0) {
+        if (this.attackQueued && hasWeapon && !isGrimoireOpen && !this.isDead && !isFlying && !input.block) {
+          this.comboWindowTimer = COMBO_SPECS[this.comboStep as ActiveComboStep]?.chainWindow ?? 0.72;
+          this.startNextComboHit();
+        } else if (this.comboStep === 4) {
+          this.comboStep = 0;
+          this.comboWindowTimer = 0;
+        }
+      }
+    } else if (this.comboWindowTimer > 0) {
+      this.comboWindowTimer = Math.max(0, this.comboWindowTimer - safeDt);
+      if (this.comboWindowTimer === 0) {
+        this.comboStep = 0;
+      }
+    }
+
     if (this.dodgeCooldown > 0) this.dodgeCooldown = Math.max(0, this.dodgeCooldown - safeDt);
     if (this.dodgeTimer > 0) this.dodgeTimer = Math.max(0, this.dodgeTimer - safeDt);
     if (this.hitReactionTimer > 0) this.hitReactionTimer = Math.max(0, this.hitReactionTimer - safeDt);
@@ -286,7 +444,9 @@ export class CharacterController {
 
     const forwardInput = (input.forward ? 1 : 0) - (input.backward ? 1 : 0);
     const strafeInput = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-    const isBlocking = Boolean(hasWeapon && input.block && !isFlying && this.grounded);
+    const isBlocking = Boolean(
+      hasWeapon && input.block && !isFlying && this.grounded && this.attackTimer <= 0
+    );
 
     let flightTiltX = 0;
     let flightRollZ = 0;
@@ -323,13 +483,19 @@ export class CharacterController {
       this.grounded = false;
 
       const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+      let yawDelta = 0;
       if (horizSpeed > 0.5) {
-        this.rotateTowards(Math.atan2(this.velocity.x, this.velocity.z), 7.5, safeDt);
+        const targetFlightYaw = Math.atan2(this.velocity.x, this.velocity.z);
+        yawDelta = targetFlightYaw - this.yaw;
+        while (yawDelta > Math.PI) yawDelta -= Math.PI * 2;
+        while (yawDelta < -Math.PI) yawDelta += Math.PI * 2;
+        this.rotateTowards(targetFlightYaw, 7.5, safeDt);
       }
 
       const pitchFactor = THREE.MathUtils.clamp(this.velocity.y / 14, -0.35, 0.35);
-      flightTiltX = (horizSpeed > 1.5 ? 0.68 : 0.25) - pitchFactor * 0.5;
-      flightRollZ = -strafeInput * 0.22;
+      flightTiltX = (horizSpeed > 1.5 ? 0.65 : 0.2) - pitchFactor * 0.52;
+      const bankFromTurn = THREE.MathUtils.clamp(-yawDelta * 0.45, -0.35, 0.35);
+      flightRollZ = THREE.MathUtils.clamp(-strafeInput * 0.2 + bankFromTurn, -0.4, 0.4);
     } else {
       this.forwardVec.set(-Math.sin(camYaw), 0, -Math.cos(camYaw)).normalize();
       this.rightVec.set(Math.cos(camYaw), 0, -Math.sin(camYaw)).normalize();
@@ -356,19 +522,22 @@ export class CharacterController {
       let targetSpeed = 0;
       if (this.dodgeTimer > 0) {
         targetSpeed = 12.5;
+      } else if (this.attackTimer > 0) {
+        // Reduce translational velocity during sword swing so swings feel grounded
+        targetSpeed = hasMoveInput ? 1.8 : 0;
       } else if (isBlocking) {
         targetSpeed = hasMoveInput ? 2.2 : 0;
       } else if (hasMoveInput) {
         if (isPureBackward) {
           targetSpeed = 3.8;
         } else if (isPureStrafe) {
-          targetSpeed = input.sprint ? 7.2 : 4.6;
+          targetSpeed = input.sprint ? 6.8 : 4.6;
         } else if (input.sprint) {
-          targetSpeed = 12.5;
+          targetSpeed = 11.8;
         } else if (hasWeapon) {
-          targetSpeed = 5.5;
+          targetSpeed = 6.2;
         } else {
-          targetSpeed = 4.6;
+          targetSpeed = 4.8;
         }
       }
 
@@ -390,13 +559,24 @@ export class CharacterController {
         1 - Math.exp(-accelRate * safeDt)
       );
 
-      if (!hasMoveInput && this.dodgeTimer <= 0 && Math.hypot(this.velocity.x, this.velocity.z) < 0.08) {
+      if (
+        !hasMoveInput &&
+        this.dodgeTimer <= 0 &&
+        this.attackTimer <= 0 &&
+        Math.hypot(this.velocity.x, this.velocity.z) < 0.05
+      ) {
         this.velocity.x = 0;
         this.velocity.z = 0;
       }
 
       // Jump anticipation + takeoff
-      if (input.jump && this.grounded && !this.pendingJump && this.landRecoveryTimer <= 0) {
+      if (
+        input.jump &&
+        this.grounded &&
+        !this.pendingJump &&
+        this.landRecoveryTimer <= 0 &&
+        this.attackTimer <= 0
+      ) {
         this.pendingJump = true;
         this.jumpAnticipationTimer = 0.08;
       }
@@ -418,7 +598,7 @@ export class CharacterController {
       const groundY = getGroundHeight(this.position.x, this.position.z);
       if (this.position.y <= groundY) {
         this.jumpStartHoldTimer = 0;
-        if (!this.grounded && (this.velocity.y < -4.5 || this.pendingFlightLand)) {
+        if (!this.grounded && (this.velocity.y < -2.2 || this.pendingFlightLand)) {
           this.landRecoveryTimer = 0.16;
           if (this.pendingFlightLand) {
             this.flightLandTimer = 0.26;
@@ -468,8 +648,13 @@ export class CharacterController {
 
     const attackProgress =
       this.attackTimer > 0 ? 1 - this.attackTimer / this.attackDuration : 0;
+    const activeComboStep = (this.attackTimer > 0 ? this.comboStep : 0) as ComboStep;
+    const [winStart, winEnd] =
+      activeComboStep >= 1 && activeComboStep <= 4
+        ? COMBO_SPECS[activeComboStep as ActiveComboStep].activeWindow
+        : [1, 0];
     const isAttackActiveHitWindow =
-      this.attackTimer > 0 && attackProgress >= 0.24 && attackProgress <= 0.68;
+      this.attackTimer > 0 && attackProgress >= winStart && attackProgress <= winEnd;
 
     this.stepResult.state = state;
     this.stepResult.horizSpeed = horizSpeed;
@@ -477,6 +662,8 @@ export class CharacterController {
     this.stepResult.grounded = this.grounded;
     this.stepResult.attackProgress = attackProgress;
     this.stepResult.isAttackActiveHitWindow = isAttackActiveHitWindow;
+    this.stepResult.comboStep = activeComboStep;
+    this.stepResult.attackId = this.attackId;
     this.stepResult.hitReactionProgress =
       this.hitReactionTimer > 0 ? 1 - this.hitReactionTimer / 0.35 : 0;
     this.stepResult.isBlocking = isBlocking;
@@ -505,13 +692,19 @@ export class CharacterController {
     if (this.isDead) return 'Death';
     if (this.hitReactionTimer > 0) return 'HitReaction';
     if (this.dodgeTimer > 0) return 'Dodge';
-    if (this.attackTimer > 0) return 'Attack';
+    if (this.attackTimer > 0) {
+      if (this.comboStep === 2) return 'Attack2';
+      if (this.comboStep === 3) return 'Attack3';
+      if (this.comboStep === 4) return 'Attack4';
+      return 'Attack1';
+    }
     if (isBlocking) return 'Block';
 
     if (isFlying) {
       if (this.flightTakeoffTimer > 0) return 'FlightTakeoff';
-      if (this.velocity.y > 2.2) return 'FlightAscend';
-      if (this.velocity.y < -2.2) return 'FlightDescend';
+      if (horizSpeed > 4.2 && Math.abs(this.velocity.y) < 5.5) return 'FlightForward';
+      if (this.velocity.y > 2.8) return 'FlightAscend';
+      if (this.velocity.y < -2.8) return 'FlightDescend';
       return horizSpeed > 1.8 ? 'FlightForward' : 'FlightHover';
     }
     if (this.flightLandTimer > 0) return 'FlightLand';
@@ -525,11 +718,11 @@ export class CharacterController {
     if (this.landRecoveryTimer > 0) return 'Land';
 
     if (horizSpeed > 0.35) {
+      if (this.startMovingTimer > 0 && horizSpeed < 3.2) return 'StartMoving';
       if (forwardInput < 0 && strafeInput === 0) return 'WalkBackward';
       if (forwardInput === 0 && strafeInput < 0) return 'StrafeLeft';
       if (forwardInput === 0 && strafeInput > 0) return 'StrafeRight';
-      if (sprint && horizSpeed > 2.0) return 'Sprint';
-      if (this.startMovingTimer > 0 && horizSpeed < 3.0) return 'StartMoving';
+      if (sprint && horizSpeed > 6.0) return 'Sprint';
       if (horizSpeed > 6.2) return 'Jog';
       return 'Walk';
     }

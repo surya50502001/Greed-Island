@@ -7,6 +7,7 @@ interface MobileControlsProps {
   hasWeapon: boolean;
   isGrimoireOpen: boolean;
   onToggleGrimoire: () => void;
+  onVisibilityChange?: (visible: boolean) => void;
 }
 
 const JOYSTICK_RADIUS = 52;
@@ -17,6 +18,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   hasWeapon,
   isGrimoireOpen,
   onToggleGrimoire,
+  onVisibilityChange,
 }) => {
   const [visible, setVisible] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -26,6 +28,10 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
       window.innerWidth <= 900
     );
   });
+
+  useEffect(() => {
+    onVisibilityChange?.(visible);
+  }, [visible, onVisibilityChange]);
 
   const [sprintLocked, setSprintLocked] = useState(false);
   const [knobOffset, setKnobOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
