@@ -3,6 +3,16 @@ import { ISLAND_RADIUS } from '../../types/game';
 import { getGroundHeight } from '../../world/terrain';
 import { CharacterLocomotionState } from './CharacterStates';
 
+import {
+  ActiveComboStep,
+  COMBO_SPECS,
+  ComboAttackSpec,
+  ComboStep,
+} from '../../domain/combat/rules';
+
+export { COMBO_SPECS };
+export type { ActiveComboStep, ComboAttackSpec, ComboStep };
+
 export interface CharacterInputState {
   forward: boolean;
   backward: boolean;
@@ -13,78 +23,6 @@ export interface CharacterInputState {
   descend: boolean;
   block: boolean;
 }
-
-export type ComboStep = 0 | 1 | 2 | 3 | 4;
-export type ActiveComboStep = 1 | 2 | 3 | 4;
-
-export interface ComboAttackSpec {
-  name: string;
-  duration: number;
-  activeWindow: [number, number];
-  bufferStart: number;
-  chainWindow: number;
-  cooldown: number;
-  lunge: number;
-  damage: number;
-  knockback: number;
-  reach: number;
-  isAoe360: boolean;
-}
-
-export const COMBO_SPECS: Record<ActiveComboStep, ComboAttackSpec> = {
-  1: {
-    name: 'Quick Cross Slash',
-    duration: 0.44,
-    activeWindow: [0.24, 0.64],
-    bufferStart: 0.22,
-    chainWindow: 0.72,
-    cooldown: 0.05,
-    lunge: 3.4,
-    damage: 22,
-    knockback: 12,
-    reach: 4.2,
-    isAoe360: false,
-  },
-  2: {
-    name: 'Reverse Slash',
-    duration: 0.44,
-    activeWindow: [0.24, 0.64],
-    bufferStart: 0.22,
-    chainWindow: 0.72,
-    cooldown: 0.05,
-    lunge: 3.8,
-    damage: 26,
-    knockback: 14,
-    reach: 4.4,
-    isAoe360: false,
-  },
-  3: {
-    name: 'Spinning Crescent',
-    duration: 0.58,
-    activeWindow: [0.22, 0.74],
-    bufferStart: 0.26,
-    chainWindow: 0.78,
-    cooldown: 0.07,
-    lunge: 4.4,
-    damage: 32,
-    knockback: 16,
-    reach: 4.8,
-    isAoe360: true,
-  },
-  4: {
-    name: 'Arcane Breaker',
-    duration: 0.74,
-    activeWindow: [0.38, 0.68],
-    bufferStart: 1.0,
-    chainWindow: 0,
-    cooldown: 0.34,
-    lunge: 5.8,
-    damage: 52,
-    knockback: 24,
-    reach: 5.2,
-    isAoe360: false,
-  },
-};
 
 export interface CharacterStepResult {
   state: CharacterLocomotionState;

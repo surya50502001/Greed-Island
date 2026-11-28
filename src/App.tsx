@@ -3,11 +3,12 @@ import { Canvas } from '@react-three/fiber';
 import { Environment, Lightformer, Sky } from '@react-three/drei';
 import * as THREE from 'three';
 import { CardId, INVISIBILITY_DURATION, PLAYER_MAX_HP } from './types/game';
-import { getGroundHeight } from './world/terrain';
+import { getGroundHeight, getTerrainHeight } from './world/terrain';
 import { World } from './components/World';
 import { createInitialEnemies, Enemies, EnemyEntity } from './components/Enemies';
 import {
   FloatingDamageEvent,
+  MeleeHitCheckParams,
   Player,
   PlayerCombatBridge,
   PlayerTouchBridge,
@@ -21,6 +22,37 @@ import {
   applyPlayerDamage,
   PLAYER_DAMAGE_COOLDOWN,
 } from './gameplay/combat/HealthSystem';
+import {
+  DEFAULT_RAID_SCHEDULER_CONFIG,
+  RaidEvent,
+} from './domain/raids/types';
+import {
+  createRaidEvent,
+  forceStartGatheringRaid,
+  joinRaid,
+  leaveRaid,
+  rollRaidTier,
+  selectRaidSpawnLocation,
+  stepRaidLifecycle,
+} from './domain/raids/scheduler';
+import {
+  BossEncounterState,
+  FENRIR_BOSS_CONFIG,
+} from './domain/bosses/types';
+import {
+  applyBossDamage,
+  createBossEncounterState,
+} from './domain/bosses/encounter';
+import { claimRaidRewards } from './domain/rewards/rules';
+import { RaidRewardGrant } from './domain/rewards/types';
+import { RaidBossActor } from './components/raids/RaidBossActor';
+import { RaidNotifications } from './components/raids/RaidNotifications';
+import { IslandMapModal } from './components/raids/IslandMapModal';
+import { RaidGatheringPanel } from './components/raids/RaidGatheringPanel';
+import { RaidEncounterHUD } from './components/raids/RaidEncounterHUD';
+import { RaidRewardModal } from './components/raids/RaidRewardModal';
+
+const LOCAL_PLAYER_ID = 'local-player';
 
 export function App() {
   const [playerHp, setPlayerHp] = useState(PLAYER_MAX_HP);
@@ -28,8 +60,21 @@ export function App() {
   const [hasWeapon, setHasWeapon] = useState(false);
   const [invisTimer, setInvisTimer] = useState(0);
   const [isGrimoireOpen, setIsGrimoireOpen] = useState(false);
+  const [isMapOpen, setIsMapOpen] = useState(false);
   const [isTouchVisible, setIsTouchVisible] = useState(false);
   const [, setPointerLocked] = useState(false);
+
+  // Raid Event & Boss Prototype State (throttled UI sync from domain refs)
+  const raidsRef = useRef<RaidEvent[]>([]);
+  const activeBossRef = useRef<BossEncounterState | null>(null);
+  const hitBossAttackIdRef = useRef<number>(-1);
+  const raidSeqRef = useRef<number>(1);
+  const nextAutoRaidAtRef = useRef<number>(Math.floor(Date.now() / 1000) + 25);
+  const [raidUiTick, setRaidUiTick] = useState<number>(Math.floor(Date.now() / 1000));
+  const [dismissedRaidIds, setDismissedRaidIds] = useState<Set<string>>(() => new Set());
+  const [selectedMapRaidId, setSelectedMapRaidId] = useState<string | null>(null);
+  const [trackedRaidId, setTrackedRaidId] = useState<string | null>(null);
+  const [claimedRewardGrant, setClaimedRewardGrant] = useState<RaidRewardGrant | null>(null);
 
   
 
@@ -125,7 +170,163 @@ export function App() {
     combatBridgeRef.current?.reviveAtStartingPlaza();
   }, []);
 
-  // Grimoire summon/dismiss & Revival keybindings
+  const spawnPrototypeRaid = useCallback((immediateGathering = false) => {
+    const now = Date.now() / 1000;
+    const activeCount = raidsRef.current.filter(
+      (r) => r.status === 'Upcoming' || r.status === 'Gathering' || r.status === 'InProgress'
+    ).length;
+    if (activeCount >= DEFAULT_RAID_SCHEDULER_CONFIG.maxSimultaneousRaids) return;
+
+    const seq = raidSeqRef.current++;
+    const seed = Math.floor(now * 1000) + seq * 7919;
+    const loc = selectRaidSpawnLocation(seed, raidsRef.current, getTerrainHeight);
+    if (!loc) return;
+
+    const tier = rollRaidTier(Math.random, DEFAULT_RAID_SCHEDULER_CONFIG.tierProbabilities);
+    const raid = createRaidEvent({
+      raidId: `raid-${seq}`,
+      bossId: FENRIR_BOSS_CONFIG.bossId,
+      bossName: FENRIR_BOSS_CONFIG.displayName,
+      bossTitle: FENRIR_BOSS_CONFIG.title,
+      bossMaxHp: FENRIR_BOSS_CONFIG.maxHp,
+      rewardTableId: FENRIR_BOSS_CONFIG.rewardTableId,
+      tier,
+      location: loc,
+      nowSec: now,
+      startImmediatelyInGathering: immediateGathering,
+    });
+    raidsRef.current = [...raidsRef.current.slice(-4), raid];
+    if (!activeBossRef.current) {
+      activeBossRef.current = createBossEncounterState(raid.raidId, FENRIR_BOSS_CONFIG, loc);
+    }
+    setRaidUiTick(now);
+  }, []);
+
+  // Periodic raid scheduler & lifecycle tick (4Hz UI sync)
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now() / 1000;
+      if (now >= nextAutoRaidAtRef.current) {
+        spawnPrototypeRaid(false);
+        const span =
+          DEFAULT_RAID_SCHEDULER_CONFIG.maxIntervalSec -
+          DEFAULT_RAID_SCHEDULER_CONFIG.minIntervalSec;
+        nextAutoRaidAtRef.current =
+          now + DEFAULT_RAID_SCHEDULER_CONFIG.minIntervalSec + Math.random() * span;
+      }
+
+      for (const r of raidsRef.current) {
+        stepRaidLifecycle(r, now);
+        if (
+          r.status === 'Completed' &&
+          r.completionStatus === 'victory' &&
+          !claimedRewardGrant
+        ) {
+          const res = claimRaidRewards(r, LOCAL_PLAYER_ID);
+          if (res.success && res.grant) {
+            setClaimedRewardGrant(res.grant);
+          }
+        }
+      }
+
+      // Ensure activeBossRef tracks the current Gathering/InProgress raid
+      const liveRaid =
+        raidsRef.current.find((r) => r.status === 'InProgress') ??
+        raidsRef.current.find((r) => r.status === 'Gathering' || r.status === 'Upcoming') ??
+        null;
+      if (liveRaid && activeBossRef.current?.raidId !== liveRaid.raidId) {
+        activeBossRef.current = createBossEncounterState(
+          liveRaid.raidId,
+          FENRIR_BOSS_CONFIG,
+          liveRaid.location
+        );
+      } else if (!liveRaid) {
+        activeBossRef.current = null;
+      }
+
+      setRaidUiTick(now);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [spawnPrototypeRaid, claimedRewardGrant]);
+
+  const handleJoinRaid = useCallback((raidId: string) => {
+    const raid = raidsRef.current.find((r) => r.raidId === raidId);
+    if (!raid) return;
+    joinRaid(raid, LOCAL_PLAYER_ID, 'Hunter (You)', Date.now() / 1000);
+    setRaidUiTick(Date.now() / 1000);
+  }, []);
+
+  const handleLeaveRaid = useCallback((raidId: string) => {
+    const raid = raidsRef.current.find((r) => r.raidId === raidId);
+    if (!raid) return;
+    leaveRaid(raid, LOCAL_PLAYER_ID);
+    setRaidUiTick(Date.now() / 1000);
+  }, []);
+
+  const handleBeginEncounter = useCallback((raidId: string) => {
+    const raid = raidsRef.current.find((r) => r.raidId === raidId);
+    if (!raid) return;
+    forceStartGatheringRaid(raid, Date.now() / 1000);
+    setRaidUiTick(Date.now() / 1000);
+  }, []);
+
+  const handleMeleeBossCheck = useCallback(
+    (params: MeleeHitCheckParams): boolean => {
+      const boss = activeBossRef.current;
+      const raid = raidsRef.current.find((r) => r.raidId === boss?.raidId);
+      if (!boss || !raid || raid.status !== 'InProgress' || boss.aiState === 'Defeated') {
+        return false;
+      }
+      if (hitBossAttackIdRef.current === params.attackId) {
+        return false;
+      }
+
+      const dx = boss.position.x - params.playerPos.x;
+      const dz = boss.position.z - params.playerPos.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > params.reach + 1.2) return false;
+
+      hitBossAttackIdRef.current = params.attackId;
+      const isWeakPoint = boss.weakPointExposed;
+      const res = applyBossDamage(boss, FENRIR_BOSS_CONFIG, params.damage, isWeakPoint);
+      if (res.appliedDamage <= 0) return false;
+
+      const participant = raid.participants.find((p) => p.playerId === LOCAL_PLAYER_ID);
+      if (participant) {
+        participant.totalDamageDealt += res.appliedDamage;
+        participant.hitsLanded += 1;
+      }
+
+      const invD = 1 / (dist || 1);
+      vfxRef.current?.spawnHitImpact(
+        boss.position,
+        dx * invD,
+        dz * invD,
+        params.color,
+        params.isFinisher || res.brokeShield
+      );
+      handleDamageNumber({
+        x: 50,
+        y: 36,
+        amount: res.appliedDamage,
+        isFinisher: params.isFinisher || isWeakPoint,
+        comboStep: params.comboStep,
+      });
+
+      if (res.defeated) {
+        raid.bossHp = 0;
+        stepRaidLifecycle(raid, Date.now() / 1000);
+        const rewardRes = claimRaidRewards(raid, LOCAL_PLAYER_ID);
+        if (rewardRes.success && rewardRes.grant) {
+          setClaimedRewardGrant(rewardRes.grant);
+        }
+      }
+      return true;
+    },
+    [handleDamageNumber]
+  );
+
+  // Grimoire & Island Map keybindings + Revival
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
@@ -136,14 +337,34 @@ export function App() {
         return;
       }
       if (e.code === 'KeyG') {
+        setIsMapOpen(false);
         setIsGrimoireOpen((prev) => !prev);
+      } else if (e.code === 'KeyM') {
+        setIsGrimoireOpen(false);
+        setIsMapOpen((prev) => !prev);
       } else if (e.code === 'Escape') {
         setIsGrimoireOpen(false);
+        setIsMapOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isDead, handleRevive]);
+
+  const activeSceneRaid =
+    raidsRef.current.find((r) => r.status === 'InProgress') ??
+    raidsRef.current.find((r) => r.status === 'Gathering' || r.status === 'Upcoming') ??
+    null;
+
+  const nearbyGatheringRaid =
+    raidsRef.current.find(
+      (r) =>
+        (r.status === 'Gathering' || r.status === 'Upcoming') &&
+        Math.hypot(
+          r.location.x - playerPosRef.current.x,
+          r.location.z - playerPosRef.current.z
+        ) <= 17
+    ) ?? null;
 
   // Invisibility countdown timer
   useEffect(() => {
@@ -243,18 +464,27 @@ export function App() {
             onPlayerHit={handlePlayerHit}
           />
           <CombatVFX ref={vfxRef} />
+          <RaidBossActor
+            raid={activeSceneRaid}
+            bossRef={activeBossRef}
+            playerPosRef={playerPosRef}
+            isInvisible={isInvisible}
+            isPlayerDead={isDead}
+            onBossAttackHit={(dmg, abilityName) => handlePlayerHit(dmg, abilityName)}
+          />
           <Player
             playerPosRef={playerPosRef}
             enemiesRef={enemiesRef}
             isFlying={isFlying}
             hasWeapon={hasWeapon}
             isInvisible={isInvisible}
-            isGrimoireOpen={isGrimoireOpen}
+            isGrimoireOpen={isGrimoireOpen || isMapOpen}
             isDead={isDead}
             combatBridgeRef={combatBridgeRef}
             touchBridgeRef={touchBridgeRef}
             vfxRef={vfxRef}
             onDamageNumber={handleDamageNumber}
+            onMeleeHitCheck={handleMeleeBossCheck}
             onComboHit={handleComboHit}
             onPointerLockChange={setPointerLocked}
           />
@@ -289,6 +519,62 @@ export function App() {
         comboAttackName={comboState.attackName}
         comboTimer={comboState.timer}
         onRevive={handleRevive}
+      />
+      <RaidEncounterHUD
+        raid={activeSceneRaid}
+        boss={activeBossRef.current}
+        nowSec={raidUiTick}
+      />
+      <RaidNotifications
+        raids={raidsRef.current}
+        playerPos={{
+          x: playerPosRef.current.x,
+          y: playerPosRef.current.y,
+          z: playerPosRef.current.z,
+        }}
+        nowSec={raidUiTick}
+        dismissedIds={dismissedRaidIds}
+        trackedRaidId={trackedRaidId}
+        onDismiss={(id) =>
+          setDismissedRaidIds((prev) => new Set(prev).add(id))
+        }
+        onReopenAll={() => setDismissedRaidIds(new Set())}
+        onViewOnMap={(id) => {
+          setSelectedMapRaidId(id);
+          setIsGrimoireOpen(false);
+          setIsMapOpen(true);
+        }}
+        onClearTrack={() => setTrackedRaidId(null)}
+      />
+      {nearbyGatheringRaid && !isDead && (
+        <RaidGatheringPanel
+          raid={nearbyGatheringRaid}
+          localPlayerId={LOCAL_PLAYER_ID}
+          nowSec={raidUiTick}
+          onJoin={handleJoinRaid}
+          onLeave={handleLeaveRaid}
+          onBeginEncounter={handleBeginEncounter}
+        />
+      )}
+      <IslandMapModal
+        isOpen={isMapOpen && !isDead}
+        raids={raidsRef.current}
+        playerPos={{
+          x: playerPosRef.current.x,
+          y: playerPosRef.current.y,
+          z: playerPosRef.current.z,
+        }}
+        nowSec={raidUiTick}
+        selectedRaidId={selectedMapRaidId}
+        trackedRaidId={trackedRaidId}
+        onSelectRaid={setSelectedMapRaidId}
+        onTrackRaid={setTrackedRaidId}
+        onSpawnPrototypeRaid={() => spawnPrototypeRaid(true)}
+        onClose={() => setIsMapOpen(false)}
+      />
+      <RaidRewardModal
+        grant={claimedRewardGrant}
+        onClose={() => setClaimedRewardGrant(null)}
       />
       <MobileControls
         touchBridgeRef={touchBridgeRef}

@@ -400,7 +400,7 @@ export const HUD: React.FC<HUDProps> = ({
             >
               {isGrimoireOpen
                 ? 'Click a card to cast  •  Press G or Esc to close'
-                : 'Press [G] to Summon Grimoire'}
+                : 'Press [G] Grimoire  •  [M] Island Map'}
             </div>
           )}
         </div>

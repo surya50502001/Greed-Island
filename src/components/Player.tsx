@@ -17,6 +17,21 @@ import {
   createAnimeSlashMaterial,
   createCrescentArcGeometry,
 } from './CombatVFX';
+import { applyEnemyDamage } from '../domain/enemies/ai';
+import { calculateMeleeDamage } from '../domain/combat/rules';
+import { Vec3 } from '../domain/math/vec3';
+
+export interface MeleeHitCheckParams {
+  attackId: number;
+  playerPos: Vec3;
+  bladeBase: Vec3;
+  bladeTip: Vec3;
+  damage: number;
+  reach: number;
+  isFinisher: boolean;
+  comboStep: ActiveComboStep;
+  color: string;
+}
 
 export interface FloatingDamageEvent {
   x: number;
@@ -53,6 +68,7 @@ interface PlayerProps {
   touchBridgeRef?: React.MutableRefObject<PlayerTouchBridge | null>;
   vfxRef?: React.RefObject<CombatVFXHandle | null>;
   onDamageNumber?: (ev: FloatingDamageEvent) => void;
+  onMeleeHitCheck?: (params: MeleeHitCheckParams) => boolean;
   onComboHit?: (comboStep: number, attackName: string) => void;
   onPointerLockChange: (locked: boolean) => void;
 }
@@ -86,6 +102,7 @@ export function Player({
   touchBridgeRef,
   vfxRef,
   onDamageNumber,
+  onMeleeHitCheck,
   onComboHit,
   onPointerLockChange,
 }: PlayerProps) {
@@ -766,6 +783,25 @@ export function Player({
         const pFwdZ = Math.cos(ctrl.yaw);
         const isFinisher = activeStep === 4;
 
+        if (onMeleeHitCheck) {
+          const hitBoss = onMeleeHitCheck({
+            attackId: step.attackId,
+            playerPos: { x: ctrl.position.x, y: ctrl.position.y, z: ctrl.position.z },
+            bladeBase: { x: bladeBaseRef.current.x, y: bladeBaseRef.current.y, z: bladeBaseRef.current.z },
+            bladeTip: { x: bladeTipRef.current.x, y: bladeTipRef.current.y, z: bladeTipRef.current.z },
+            damage: calculateMeleeDamage(spec.damage),
+            reach: spec.reach + 1.4,
+            isFinisher,
+            comboStep: activeStep,
+            color: trailColor,
+          });
+          if (hitBoss) {
+            hitStopTimerRef.current = Math.max(hitStopTimerRef.current, isFinisher ? 0.068 : 0.032);
+            shakeIntensityRef.current = Math.max(shakeIntensityRef.current, isFinisher ? 0.22 : 0.09);
+            onComboHit?.(activeStep, spec.name);
+          }
+        }
+
         for (const enemy of enemiesRef.current) {
           if (!enemy.alive || hitEnemiesThisAttackRef.current.has(enemy.id)) continue;
           const dx = enemy.position.x - ctrl.position.x;
@@ -803,16 +839,16 @@ export function Player({
 
           if (inFrontArc && (bladeHit || dist < spec.reach * 0.72)) {
             hitEnemiesThisAttackRef.current.add(enemy.id);
-            enemy.hitFlash = isFinisher ? 0.3 : 0.22;
-            enemy.hp = Math.max(0, enemy.hp - spec.damage);
             const invD = 1 / (dist || 1);
-            enemy.knockbackX = dx * invD * spec.knockback;
-            enemy.knockbackZ = dz * invD * spec.knockback;
-            if (enemy.hp <= 0) {
-              enemy.alive = false;
-              enemy.chasing = false;
-              enemy.respawnTimer = 14;
-            }
+            const damage = calculateMeleeDamage(spec.damage);
+            applyEnemyDamage(
+              enemy,
+              damage,
+              dx * invD,
+              dz * invD,
+              spec.knockback,
+              isFinisher ? 0.3 : 0.22
+            );
 
             // Combat feedback: brief hit-stop, camera shake, pooled sparks, floating damage number
             hitStopTimerRef.current = Math.max(hitStopTimerRef.current, isFinisher ? 0.068 : 0.03);
@@ -833,7 +869,7 @@ export function Player({
                 onDamageNumber({
                   x: (projVecRef.current.x * 0.5 + 0.5) * 100,
                   y: (-projVecRef.current.y * 0.5 + 0.5) * 100,
-                  amount: spec.damage,
+                  amount: damage,
                   isFinisher,
                   comboStep: activeStep,
                 });

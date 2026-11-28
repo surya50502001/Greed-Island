@@ -2,16 +2,17 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'rea
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { getGroundHeight } from '../world/terrain';
+import { Vec3 } from '../domain/math/vec3';
 
 export interface CombatVFXHandle {
   spawnHitImpact: (
-    pos: THREE.Vector3,
+    pos: Vec3,
     dirX: number,
     dirZ: number,
     colorHex: string,
     isFinisher: boolean
   ) => void;
-  spawnFinisherShockwave: (pos: THREE.Vector3) => void;
+  spawnFinisherShockwave: (pos: Vec3) => void;
 }
 
 interface SparkSlot {
@@ -205,7 +206,7 @@ export const CombatVFX = forwardRef<CombatVFXHandle>((_, ref) => {
         slot.active = true;
         slot.maxLife = isFinisher ? 0.34 : 0.24;
         slot.life = slot.maxLife;
-        slot.pos.copy(pos);
+        slot.pos.set(pos.x, pos.y, pos.z);
         slot.pos.y += 0.75 + (Math.random() - 0.5) * 0.45;
         const spread = (Math.random() - 0.5) * 2.2;
         const speed = (isFinisher ? 9.5 : 6.8) + Math.random() * 4.5;
@@ -225,7 +226,7 @@ export const CombatVFX = forwardRef<CombatVFXHandle>((_, ref) => {
         burst.active = true;
         burst.maxLife = isFinisher ? 0.28 : 0.18;
         burst.life = burst.maxLife;
-        burst.pos.copy(pos);
+        burst.pos.set(pos.x, pos.y, pos.z);
         burst.pos.y += 0.82;
         burst.color.set(colorHex);
         burst.maxScale = isFinisher ? 2.4 : 1.35;
