@@ -1,29 +1,16 @@
 import * as signalR from '@microsoft/signalr';
+import { SharedWorldPlayer } from '../domain/multiplayer/validation';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
-export interface RemotePlayerSnapshot {
-  playerId: string;
-  characterName: string;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  locomotionState: string;
-  horizSpeed: number;
-  isFlying: boolean;
-  hasWeapon: boolean;
-  isInvisible: boolean;
-  timestampMs: number;
-}
+export type RemotePlayerSnapshot = SharedWorldPlayer;
 
-export interface RoomActionResult {
+export interface WorldEnterResult {
   success: boolean;
   error?: string;
-  roomCode?: string;
   playerId?: string;
+  reconnectToken?: string;
   characterName?: string;
-  isReady: boolean;
   players: RemotePlayerSnapshot[];
 }
 
@@ -37,24 +24,52 @@ export interface MovementInputPayload {
   isFlying: boolean;
   hasWeapon: boolean;
   isInvisible: boolean;
+  comboStep: number;
+}
+
+export interface AttackRequestPayload {
+  targetPlayerId: string;
+  comboStep: number;
+}
+
+export interface PlayerAttackedEvent {
+  attackerPlayerId: string;
+  targetPlayerId: string;
+  comboStep: number;
+}
+
+export interface PlayerDamagedEvent {
+  attackerPlayerId: string;
+  targetPlayerId: string;
+  damage: number;
+  currentHealth: number;
+  maxHealth: number;
+  isAlive: boolean;
+  comboStep: number;
+}
+
+export interface PlayerDiedEvent {
+  playerId: string;
+  killerPlayerId: string;
+  respawnDelaySeconds: number;
+}
+
+export interface PlayerRespawnedEvent {
+  player: RemotePlayerSnapshot;
 }
 
 export interface SignalRHandlers {
   onConnectionStateChange?: (status: ConnectionStatus) => void;
-  onRoomUpdated?: (payload: {
-    roomCode: string;
-    isReady: boolean;
-    players: RemotePlayerSnapshot[];
-  }) => void;
-  onWorldReady?: (payload: {
-    roomCode: string;
-    players: RemotePlayerSnapshot[];
-  }) => void;
+  onPlayerJoined?: (snapshot: RemotePlayerSnapshot) => void;
   onPlayerMoved?: (snapshot: RemotePlayerSnapshot) => void;
   onPlayerLeft?: (payload: {
     playerId: string;
     players: RemotePlayerSnapshot[];
   }) => void;
+  onPlayerAttacked?: (ev: PlayerAttackedEvent) => void;
+  onPlayerDamaged?: (ev: PlayerDamagedEvent) => void;
+  onPlayerDied?: (ev: PlayerDiedEvent) => void;
+  onPlayerRespawned?: (ev: PlayerRespawnedEvent) => void;
   onReconnected?: () => void;
   onDisconnected?: (err?: Error) => void;
 }
@@ -81,10 +96,13 @@ export class GreedSignalRClient {
   private lastSendMs = 0;
 
   private attachLifecycle(conn: signalR.HubConnection, handlers: SignalRHandlers): void {
-    conn.on('RoomUpdated', (payload) => handlers.onRoomUpdated?.(payload));
-    conn.on('WorldReady', (payload) => handlers.onWorldReady?.(payload));
+    conn.on('PlayerJoined', (snapshot) => handlers.onPlayerJoined?.(snapshot));
     conn.on('PlayerMoved', (snapshot) => handlers.onPlayerMoved?.(snapshot));
     conn.on('PlayerLeft', (payload) => handlers.onPlayerLeft?.(payload));
+    conn.on('PlayerAttacked', (ev) => handlers.onPlayerAttacked?.(ev));
+    conn.on('PlayerDamaged', (ev) => handlers.onPlayerDamaged?.(ev));
+    conn.on('PlayerDied', (ev) => handlers.onPlayerDied?.(ev));
+    conn.on('PlayerRespawned', (ev) => handlers.onPlayerRespawned?.(ev));
     conn.onreconnecting(() => handlers.onConnectionStateChange?.('reconnecting'));
     conn.onreconnected(() => {
       handlers.onConnectionStateChange?.('connected');
@@ -138,48 +156,29 @@ export class GreedSignalRClient {
     }
   }
 
-  public async createRoom(characterName: string): Promise<RoomActionResult> {
+  public async enterWorld(characterName: string): Promise<WorldEnterResult> {
     if (!this.connection) {
-      return { success: false, error: 'Not connected to server.', isReady: false, players: [] };
+      return { success: false, error: 'Not connected to server.', players: [] };
     }
-    return this.connection.invoke<RoomActionResult>('CreateRoom', characterName);
+    return this.connection.invoke<WorldEnterResult>('EnterWorld', characterName);
   }
 
-  public async joinRoom(characterName: string, roomCode: string): Promise<RoomActionResult> {
-    if (!this.connection) {
-      return { success: false, error: 'Not connected to server.', isReady: false, players: [] };
-    }
-    return this.connection.invoke<RoomActionResult>('JoinRoom', characterName, roomCode);
-  }
-
-  public async reconnectToRoom(
+  public async reconnectWorld(
     playerId: string,
-    characterName: string,
-    roomCode: string
-  ): Promise<RoomActionResult> {
+    reconnectToken: string,
+    characterName: string
+  ): Promise<WorldEnterResult> {
     if (!this.connection) {
-      return { success: false, error: 'Not connected to server.', isReady: false, players: [] };
+      return { success: false, error: 'Not connected to server.', players: [] };
     }
-    return this.connection.invoke<RoomActionResult>(
-      'ReconnectToRoom',
+    return this.connection.invoke<WorldEnterResult>(
+      'ReconnectWorld',
       playerId,
-      characterName,
-      roomCode
+      reconnectToken,
+      characterName
     );
   }
 
-  public async leaveRoom(): Promise<void> {
-    if (
-      this.connection &&
-      this.connection.state === signalR.HubConnectionState.Connected
-    ) {
-      await this.connection.invoke('LeaveRoom').catch(() => {});
-    }
-  }
-
-  /**
-   * Sends movement at ~16 Hz (every 60ms) to keep bandwidth smooth and predictable.
-   */
   public sendMovement(payload: MovementInputPayload): void {
     if (
       !this.connection ||
@@ -193,9 +192,18 @@ export class GreedSignalRClient {
     void this.connection.invoke('SendMovement', payload).catch(() => {});
   }
 
+  public requestAttack(payload: AttackRequestPayload): void {
+    if (
+      !this.connection ||
+      this.connection.state !== signalR.HubConnectionState.Connected
+    ) {
+      return;
+    }
+    void this.connection.invoke('RequestAttack', payload).catch(() => {});
+  }
+
   public async disconnect(): Promise<void> {
     if (this.connection) {
-      await this.leaveRoom();
       await this.connection.stop();
       this.connection = null;
     }

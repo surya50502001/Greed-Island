@@ -22,8 +22,9 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<PlayerSessionManager>();
-builder.Services.AddSingleton<RoomManager>();
+builder.Services.AddSingleton<WorldManager>();
 builder.Services.AddSingleton<GameStateManager>();
+builder.Services.AddSingleton<CombatManager>();
 
 var app = builder.Build();
 

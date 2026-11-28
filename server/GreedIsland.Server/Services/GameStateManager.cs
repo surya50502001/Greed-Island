@@ -6,7 +6,6 @@ namespace GreedIsland.Server.Services;
 /// Prototype-level server movement validator.
 /// Rejects malformed coordinates, invalid locomotion states, excessive update rates,
 /// and impossible speed/teleport jumps while keeping client-predicted movement responsive.
-/// Full server-authoritative physics simulation belongs to a later multiplayer stage.
 /// </summary>
 public sealed class GameStateManager
 {
@@ -51,7 +50,7 @@ public sealed class GameStateManager
         !string.IsNullOrWhiteSpace(state) && ValidLocomotionStates.Contains(state);
 
     public bool TryApplyMovement(
-        GameRoom room,
+        WorldManager world,
         PlayerSession session,
         MovementInputDto input,
         long nowMs,
@@ -59,7 +58,6 @@ public sealed class GameStateManager
     {
         updatedSnapshot = null;
 
-        // Rate limiting per player session
         if (session.LastMovementAcceptedMs > 0 &&
             nowMs - session.LastMovementAcceptedMs < MinMovementIntervalMs)
         {
@@ -90,9 +88,15 @@ public sealed class GameStateManager
             return false;
         }
 
-        lock (room.SyncRoot)
+        lock (world.SyncRoot)
         {
-            if (!room.Players.TryGetValue(session.PlayerId, out var current))
+            var current = world.GetPlayer(session.PlayerId);
+            if (current is null)
+            {
+                return false;
+            }
+
+            if (!current.IsAlive)
             {
                 return false;
             }
@@ -121,6 +125,7 @@ public sealed class GameStateManager
             current.IsFlying = input.IsFlying;
             current.HasWeapon = input.HasWeapon;
             current.IsInvisible = input.IsInvisible;
+            current.ComboStep = Math.Clamp(input.ComboStep, 0, 4);
             current.TimestampMs = nowMs;
 
             updatedSnapshot = current;

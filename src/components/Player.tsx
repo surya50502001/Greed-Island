@@ -53,7 +53,7 @@ export interface PlayerTouchBridge {
 export interface PlayerCombatBridge {
   triggerHitReaction: () => void;
   triggerDeath: () => void;
-  reviveAtStartingPlaza: () => void;
+  reviveAtStartingPlaza: (x?: number, z?: number) => void;
   isBlocking: () => boolean;
 }
 
@@ -218,8 +218,8 @@ export function Player({
         triggerDeath: () => {
           controllerRef.current.triggerDeath();
         },
-        reviveAtStartingPlaza: () => {
-          controllerRef.current.reviveAt(0, 0);
+        reviveAtStartingPlaza: (x = 0, z = 0) => {
+          controllerRef.current.reviveAt(x, z);
         },
         isBlocking: () => hasWeapon && controllerRef.current.getIsBlocking(),
       };
@@ -602,6 +602,7 @@ export function Player({
         isFlying,
         hasWeapon,
         isInvisible,
+        comboStep: step.comboStep,
       });
     }
 

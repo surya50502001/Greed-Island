@@ -73,6 +73,11 @@ import { RaidGatheringPanel } from './components/raids/RaidGatheringPanel';
 import { RaidEncounterHUD } from './components/raids/RaidEncounterHUD';
 import { RaidRewardModal } from './components/raids/RaidRewardModal';
 import {
+  applyWorldDamage,
+  removeWorldPlayer,
+  upsertWorldPlayer,
+} from './domain/multiplayer/validation';
+import {
   ConnectionStatus,
   GreedSignalRClient,
   MovementInputPayload,
@@ -93,15 +98,18 @@ export function App() {
   const [isTouchVisible, setIsTouchVisible] = useState(false);
   const [, setPointerLocked] = useState(false);
 
-  // Multiplayer Lobby, Identity & SignalR Sync State
+  // Multiplayer Shared World, Identity & PvP State
   const signalRRef = useRef<GreedSignalRClient | null>(null);
   const remoteSnapshotsRef = useRef<Record<string, RemotePlayerSnapshot>>({});
+  const hitPvpTargetsRef = useRef<{ attackId: number; targets: Set<string> }>({
+    attackId: -1,
+    targets: new Set(),
+  });
   const [isLobbyOpen, setIsLobbyOpen] = useState(true);
   const [isMultiplayerActive, setIsMultiplayerActive] = useState(false);
   const [mpBusy, setMpBusy] = useState(false);
   const [mpStatus, setMpStatus] = useState<string | null>(null);
   const [mpConnectionStatus, setMpConnectionStatus] = useState<ConnectionStatus>('disconnected');
-  const [mpRoomCode, setMpRoomCode] = useState<string | null>(null);
   const [mpLocalPlayerId, setMpLocalPlayerId] = useState<string | null>(null);
   const [mpCharacterName, setMpCharacterName] = useState<string | null>(null);
   const [mpRoomPlayers, setMpRoomPlayers] = useState<RemotePlayerSnapshot[]>([]);
@@ -113,7 +121,7 @@ export function App() {
   } | null>(null);
 
   const mpSelfIdRef = useRef<string | null>(null);
-  const mpRoomCodeRef = useRef<string | null>(null);
+  const mpReconnectTokenRef = useRef<string | null>(null);
   const mpCharNameRef = useRef<string | null>(null);
 
   // Local Card Inventory, 4-Slot Loadout, Cooldowns, & Progression Materials
@@ -195,43 +203,101 @@ export function App() {
       onConnectionStateChange: (status) => {
         setMpConnectionStatus(status);
       },
-      onRoomUpdated: (payload) => {
-        const selfId = mpSelfIdRef.current;
-        for (const p of payload.players) {
-          if (p.playerId !== selfId) {
-            remoteSnapshotsRef.current[p.playerId] = p;
-          }
-        }
-        setMpRoomPlayers(payload.players);
-      },
-      onWorldReady: (payload) => {
-        const selfId = mpSelfIdRef.current;
-        setMpRoomPlayers(payload.players);
-        for (const p of payload.players) {
-          if (p.playerId === selfId) {
-            setMpLocalSpawn({ x: p.x, y: p.y, z: p.z, yaw: p.yaw });
-          } else {
-            remoteSnapshotsRef.current[p.playerId] = p;
-          }
-        }
-        setIsMultiplayerActive(true);
-        setIsLobbyOpen(false);
+      onPlayerJoined: (snapshot) => {
+        if (snapshot.playerId === mpSelfIdRef.current) return;
+        remoteSnapshotsRef.current[snapshot.playerId] = snapshot;
+        setMpRoomPlayers((prev) => upsertWorldPlayer(prev, snapshot));
       },
       onPlayerMoved: (snapshot) => {
+        if (snapshot.playerId === mpSelfIdRef.current) return;
         remoteSnapshotsRef.current[snapshot.playerId] = snapshot;
       },
       onPlayerLeft: (payload) => {
         delete remoteSnapshotsRef.current[payload.playerId];
-        setMpRoomPlayers(payload.players);
+        setMpRoomPlayers((prev) => removeWorldPlayer(prev, payload.playerId));
+      },
+      onPlayerDamaged: (ev) => {
+        const selfId = mpSelfIdRef.current;
+        if (ev.targetPlayerId === selfId) {
+          setPlayerHp(ev.currentHealth);
+          if (ev.isAlive) {
+            combatBridgeRef.current?.triggerHitReaction();
+          }
+          handleDamageNumber({
+            x: 50,
+            y: 44,
+            amount: ev.damage,
+            isFinisher: ev.comboStep === 4,
+            comboStep: ev.comboStep,
+          });
+        } else {
+          const target = remoteSnapshotsRef.current[ev.targetPlayerId];
+          if (target) {
+            remoteSnapshotsRef.current[ev.targetPlayerId] = {
+              ...target,
+              currentHealth: ev.currentHealth,
+              maxHealth: ev.maxHealth,
+              isAlive: ev.isAlive,
+            };
+            vfxRef.current?.spawnHitImpact(
+              { x: target.x, y: target.y, z: target.z },
+              0,
+              1,
+              ev.comboStep === 4 ? '#fb923c' : '#67e8f9',
+              ev.comboStep === 4
+            );
+            handleDamageNumber({
+              x: 50,
+              y: 36,
+              amount: ev.damage,
+              isFinisher: ev.comboStep === 4,
+              comboStep: ev.comboStep,
+            });
+          }
+          setMpRoomPlayers((prev) =>
+            applyWorldDamage(prev, ev.targetPlayerId, ev.currentHealth, ev.maxHealth, ev.isAlive)
+          );
+        }
+      },
+      onPlayerDied: (ev) => {
+        if (ev.playerId === mpSelfIdRef.current) {
+          setPlayerHp(0);
+          setIsGrimoireOpen(false);
+          setIsFlying(false);
+          combatBridgeRef.current?.triggerDeath();
+        } else {
+          const target = remoteSnapshotsRef.current[ev.playerId];
+          if (target) {
+            remoteSnapshotsRef.current[ev.playerId] = {
+              ...target,
+              currentHealth: 0,
+              isAlive: false,
+            };
+          }
+          setMpRoomPlayers((prev) =>
+            applyWorldDamage(prev, ev.playerId, 0, 100, false)
+          );
+        }
+      },
+      onPlayerRespawned: (ev) => {
+        const p = ev.player;
+        if (p.playerId === mpSelfIdRef.current) {
+          setPlayerHp(p.currentHealth);
+          setIsFlying(false);
+          combatBridgeRef.current?.reviveAtStartingPlaza(p.x, p.z);
+        } else {
+          remoteSnapshotsRef.current[p.playerId] = p;
+          setMpRoomPlayers((prev) => upsertWorldPlayer(prev, p));
+        }
       },
       onReconnected: () => {
         const selfId = mpSelfIdRef.current;
+        const token = mpReconnectTokenRef.current;
         const charName = mpCharNameRef.current;
-        const code = mpRoomCodeRef.current;
-        if (!selfId || !charName || !code || !signalRRef.current) return;
-        void signalRRef.current.reconnectToRoom(selfId, charName, code).then((res) => {
+        if (!selfId || !token || !charName || !signalRRef.current) return;
+        void signalRRef.current.reconnectWorld(selfId, token, charName).then((res) => {
           if (!res.success) {
-            setMpStatus(res.error ?? 'Failed to restore room after reconnect.');
+            setMpStatus(res.error ?? 'Failed to restore session after reconnect.');
             return;
           }
           const activeIds = new Set(res.players.map((p) => p.playerId));
@@ -241,7 +307,10 @@ export function App() {
             }
           }
           for (const p of res.players) {
-            if (p.playerId !== selfId) {
+            if (p.playerId === selfId) {
+              setPlayerHp(p.currentHealth);
+              if (!p.isAlive) combatBridgeRef.current?.triggerDeath();
+            } else {
               remoteSnapshotsRef.current[p.playerId] = p;
             }
           }
@@ -252,68 +321,36 @@ export function App() {
         setMpStatus('Disconnected from multiplayer server.');
       },
     });
-  }, []);
+  }, [handleDamageNumber]);
 
-  const handleCreateRoom = useCallback(
+  const handleEnterWorld = useCallback(
     async (characterName: string) => {
       setMpBusy(true);
       setMpStatus(null);
       try {
         await ensureSignalRConnected();
-        const res = await signalRRef.current!.createRoom(characterName);
+        const res = await signalRRef.current!.enterWorld(characterName);
         if (!res.success) {
-          setMpStatus(res.error ?? 'Failed to create room.');
+          setMpStatus(res.error ?? 'Failed to enter world.');
           return;
         }
         mpSelfIdRef.current = res.playerId ?? null;
+        mpReconnectTokenRef.current = res.reconnectToken ?? null;
         mpCharNameRef.current = res.characterName ?? characterName;
-        mpRoomCodeRef.current = res.roomCode ?? null;
         setMpLocalPlayerId(res.playerId ?? null);
         setMpCharacterName(res.characterName ?? characterName);
-        setMpRoomCode(res.roomCode ?? null);
         setMpRoomPlayers(res.players);
-      } catch (err) {
-        setMpStatus(
-          err instanceof Error && err.message.includes('VITE_MULTIPLAYER_URL')
-            ? err.message
-            : 'Could not reach multiplayer server. Check backend URL.'
-        );
-      } finally {
-        setMpBusy(false);
-      }
-    },
-    [ensureSignalRConnected]
-  );
 
-  const handleJoinRoom = useCallback(
-    async (characterName: string, roomCode: string) => {
-      setMpBusy(true);
-      setMpStatus(null);
-      try {
-        await ensureSignalRConnected();
-        const res = await signalRRef.current!.joinRoom(characterName, roomCode);
-        if (!res.success) {
-          setMpStatus(res.error ?? 'Failed to join room.');
-          return;
-        }
-        mpSelfIdRef.current = res.playerId ?? null;
-        mpCharNameRef.current = res.characterName ?? characterName;
-        mpRoomCodeRef.current = res.roomCode ?? null;
-        setMpLocalPlayerId(res.playerId ?? null);
-        setMpCharacterName(res.characterName ?? characterName);
-        setMpRoomCode(res.roomCode ?? null);
-        setMpRoomPlayers(res.players);
-        if (res.isReady) {
-          for (const p of res.players) {
-            if (p.playerId === res.playerId) {
-              setMpLocalSpawn({ x: p.x, y: p.y, z: p.z, yaw: p.yaw });
-            } else {
-              remoteSnapshotsRef.current[p.playerId] = p;
-            }
+        for (const p of res.players) {
+          if (p.playerId === res.playerId) {
+            setMpLocalSpawn({ x: p.x, y: p.y, z: p.z, yaw: p.yaw });
+            setPlayerHp(p.currentHealth);
+          } else {
+            remoteSnapshotsRef.current[p.playerId] = p;
           }
-          setIsMultiplayerActive(true);
-          setIsLobbyOpen(false);
         }
+        setIsMultiplayerActive(true);
+        setIsLobbyOpen(false);
       } catch (err) {
         setMpStatus(
           err instanceof Error && err.message.includes('VITE_MULTIPLAYER_URL')
@@ -330,12 +367,11 @@ export function App() {
   const handlePlaySolo = useCallback(() => {
     void signalRRef.current?.disconnect();
     mpSelfIdRef.current = null;
+    mpReconnectTokenRef.current = null;
     mpCharNameRef.current = null;
-    mpRoomCodeRef.current = null;
     remoteSnapshotsRef.current = {};
     setIsMultiplayerActive(false);
     setMpConnectionStatus('disconnected');
-    setMpRoomCode(null);
     setMpRoomPlayers([]);
     setIsLobbyOpen(false);
   }, []);
@@ -573,19 +609,41 @@ export function App() {
 
   const handleMeleeBossCheck = useCallback(
     (params: MeleeHitCheckParams): boolean => {
+      let hitAnything = false;
+
+      // 1. Check PvP hits against alive remote players (server-authoritative damage)
+      if (isMultiplayerActive && signalRRef.current) {
+        if (hitPvpTargetsRef.current.attackId !== params.attackId) {
+          hitPvpTargetsRef.current = { attackId: params.attackId, targets: new Set() };
+        }
+        for (const rp of Object.values(remoteSnapshotsRef.current)) {
+          if (!rp.isAlive || hitPvpTargetsRef.current.targets.has(rp.playerId)) continue;
+          const dist = Math.hypot(rp.x - params.playerPos.x, rp.z - params.playerPos.z);
+          if (dist <= params.reach + 0.6 && Math.abs(rp.y - params.playerPos.y) < 3.5) {
+            hitPvpTargetsRef.current.targets.add(rp.playerId);
+            signalRRef.current.requestAttack({
+              targetPlayerId: rp.playerId,
+              comboStep: params.comboStep,
+            });
+            hitAnything = true;
+          }
+        }
+      }
+
+      // 2. Check Raid Boss hit
       const boss = activeBossRef.current;
       const raid = raidsRef.current.find((r) => r.raidId === boss?.raidId);
       if (!boss || !raid || raid.status !== 'InProgress' || boss.aiState === 'Defeated') {
-        return false;
+        return hitAnything;
       }
       if (hitBossAttackIdRef.current === params.attackId) {
-        return false;
+        return hitAnything;
       }
 
       const dx = boss.position.x - params.playerPos.x;
       const dz = boss.position.z - params.playerPos.z;
       const dist = Math.hypot(dx, dz);
-      if (dist > params.reach + 1.2) return false;
+      if (dist > params.reach + 1.2) return hitAnything;
 
       hitBossAttackIdRef.current = params.attackId;
       const isWeakPoint = boss.weakPointExposed;
@@ -625,7 +683,7 @@ export function App() {
       }
       return true;
     },
-    [handleDamageNumber, applyRewardGrantToInventory]
+    [handleDamageNumber, applyRewardGrantToInventory, isMultiplayerActive]
   );
 
   // Grimoire & Island Map keybindings + Revival
@@ -925,13 +983,9 @@ export function App() {
       />
       <MultiplayerLobby
         isOpen={isLobbyOpen}
-        roomCode={mpRoomCode}
-        players={mpRoomPlayers}
-        localPlayerId={mpLocalPlayerId}
         statusMessage={mpStatus}
         isBusy={mpBusy}
-        onCreateRoom={handleCreateRoom}
-        onJoinRoom={handleJoinRoom}
+        onEnterWorld={handleEnterWorld}
         onPlaySolo={handlePlaySolo}
       />
       <MobileControls

@@ -1,42 +1,76 @@
 import { describe, expect, it } from 'vitest';
 import {
-  normalizeRoomCode,
+  applyWorldDamage,
+  removeWorldPlayer,
+  SharedWorldPlayer,
+  upsertWorldPlayer,
   validateCharacterName,
-  validateRoomCode,
 } from '../multiplayer/validation';
 import { resolveMultiplayerHubUrl } from '../../network/SignalRClient';
 
-describe('multiplayer character identity and room validation', () => {
-  it('rejects empty, whitespace-only, short, or invalid character names', () => {
-    expect(validateCharacterName('').valid).toBe(false);
+const makePlayer = (overrides: Partial<SharedWorldPlayer> = {}): SharedWorldPlayer => ({
+  playerId: 'player-1',
+  characterName: 'Gon',
+  x: 0,
+  y: 2.06,
+  z: 2.6,
+  yaw: 0,
+  locomotionState: 'Idle',
+  horizSpeed: 0,
+  isFlying: false,
+  hasWeapon: false,
+  isInvisible: false,
+  comboStep: 0,
+  currentHealth: 100,
+  maxHealth: 100,
+  isAlive: true,
+  timestampMs: 1000,
+  ...overrides,
+});
+
+describe('multiplayer shared-world validation & state helpers', () => {
+  it('validates and trims character names', () => {
+    expect(validateCharacterName('  Gon  ')).toEqual({ valid: true, normalized: 'Gon' });
     expect(validateCharacterName('   ').valid).toBe(false);
-    expect(validateCharacterName('AB').valid).toBe(false);
-    expect(validateCharacterName('TooLongCharacterName123').valid).toBe(false);
-    expect(validateCharacterName('<script>').valid).toBe(false);
+    expect(validateCharacterName('ab').valid).toBe(false);
+    expect(validateCharacterName('NameExceedingSixteenChars').valid).toBe(false);
+    expect(validateCharacterName('Gon!@#').valid).toBe(false);
   });
 
-  it('trims and accepts valid character names', () => {
-    const res1 = validateCharacterName('  KAI  ');
-    expect(res1.valid).toBe(true);
-    expect(res1.normalized).toBe('KAI');
-
-    const res2 = validateCharacterName('Itachi_01');
-    expect(res2.valid).toBe(true);
-    expect(res2.normalized).toBe('Itachi_01');
-  });
-
-  it('normalizes and validates 6-character room codes', () => {
-    expect(normalizeRoomCode(' ab12cd ')).toBe('AB12CD');
-    expect(validateRoomCode('gi4k9p').valid).toBe(true);
-    expect(validateRoomCode('ABC').valid).toBe(false);
-    expect(validateRoomCode('AB-123').valid).toBe(false);
-  });
-
-  it('uses localhost only in dev and requires VITE_MULTIPLAYER_URL in production', () => {
+  it('resolves SignalR hub URL for dev and production', () => {
+    expect(resolveMultiplayerHubUrl('  https://greed-island.onrender.com/hubs/game  ', false)).toBe(
+      'https://greed-island.onrender.com/hubs/game'
+    );
     expect(resolveMultiplayerHubUrl(undefined, true)).toBe('http://localhost:5000/hubs/game');
     expect(resolveMultiplayerHubUrl(undefined, false)).toBeNull();
-    expect(resolveMultiplayerHubUrl('https://api.example.com/hubs/game', false)).toBe(
-      'https://api.example.com/hubs/game'
-    );
+  });
+
+  it('upserts, deduplicates, damages, respawns, and removes world players', () => {
+    const p1 = makePlayer({ playerId: 'p1', characterName: 'Gon' });
+    const p2 = makePlayer({ playerId: 'p2', characterName: 'Killua', x: 2.6, z: 0 });
+
+    let players = upsertWorldPlayer([], p1);
+    players = upsertWorldPlayer(players, p2);
+    expect(players).toHaveLength(2);
+
+    // Deduplicate on reconnect/update
+    players = upsertWorldPlayer(players, makePlayer({ playerId: 'p1', characterName: 'Gon', x: 5 }));
+    expect(players).toHaveLength(2);
+    expect(players.find((p) => p.playerId === 'p1')?.x).toBe(5);
+
+    // Apply server-authoritative PvP damage & death
+    players = applyWorldDamage(players, 'p2', 0, 100, false);
+    expect(players.find((p) => p.playerId === 'p2')?.currentHealth).toBe(0);
+    expect(players.find((p) => p.playerId === 'p2')?.isAlive).toBe(false);
+
+    // Respawn via upsertWorldPlayer
+    players = upsertWorldPlayer(players, makePlayer({ playerId: 'p2', characterName: 'Killua', currentHealth: 100, isAlive: true }));
+    expect(players.find((p) => p.playerId === 'p2')?.isAlive).toBe(true);
+    expect(players.find((p) => p.playerId === 'p2')?.currentHealth).toBe(100);
+
+    // Remove on disconnect
+    players = removeWorldPlayer(players, 'p1');
+    expect(players).toHaveLength(1);
+    expect(players[0].playerId).toBe('p2');
   });
 });

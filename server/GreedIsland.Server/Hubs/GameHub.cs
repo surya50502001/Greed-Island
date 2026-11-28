@@ -4,181 +4,155 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace GreedIsland.Server.Hubs;
 
-public sealed class RoomActionResult
+public sealed class WorldEnterResult
 {
     public bool Success { get; init; }
     public string? Error { get; init; }
-    public string? RoomCode { get; init; }
     public string? PlayerId { get; init; }
+    public string? ReconnectToken { get; init; }
     public string? CharacterName { get; init; }
-    public bool IsReady { get; init; }
     public PlayerSnapshot[] Players { get; init; } = [];
 }
 
 public sealed class GameHub(
     PlayerSessionManager sessions,
-    RoomManager rooms,
-    GameStateManager gameState) : Hub
+    WorldManager world,
+    GameStateManager gameState,
+    CombatManager combat,
+    IHubContext<GameHub> hubContext) : Hub
 {
-    private async Task DetachExistingSessionAsync()
+    public async Task<WorldEnterResult> EnterWorld(string characterName)
     {
-        var existing = sessions.RemoveByConnection(Context.ConnectionId);
-        if (existing is null) return;
-
-        if (!string.IsNullOrEmpty(existing.RoomCode))
+        var (isValid, normalizedName, error) = PlayerSessionManager.ValidateCharacterName(characterName);
+        if (!isValid)
         {
-            await Groups.RemoveFromGroupAsync(Context.ConnectionId, existing.RoomCode);
-            var (oldRoom, removed) = rooms.RemovePlayer(existing);
-            if (removed && oldRoom is not null)
+            return new WorldEnterResult { Success = false, Error = error };
+        }
+
+        // Clean up any prior session on this connection
+        var prior = sessions.MarkDisconnected(Context.ConnectionId);
+        if (prior is not null)
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, WorldManager.MainWorldGroup);
+            if (world.RemovePlayer(prior.PlayerId))
             {
-                await Clients.Group(oldRoom.RoomCode).SendAsync("PlayerLeft", new
+                await Clients.Group(WorldManager.MainWorldGroup).SendAsync("PlayerLeft", new
                 {
-                    playerId = existing.PlayerId,
-                    players = oldRoom.Players.Values.ToArray(),
+                    playerId = prior.PlayerId,
+                    players = world.GetAllPlayers(),
                 });
             }
         }
-    }
 
-    public async Task<RoomActionResult> CreateRoom(string characterName)
-    {
-        var (isValid, normalizedName, error) = PlayerSessionManager.ValidateCharacterName(characterName);
-        if (!isValid)
-        {
-            return new RoomActionResult { Success = false, Error = error };
-        }
+        var session = sessions.CreateSession(Context.ConnectionId, normalizedName);
+        var selfSnapshot = world.EnterWorld(session);
 
-        await DetachExistingSessionAsync();
+        await Groups.AddToGroupAsync(Context.ConnectionId, WorldManager.MainWorldGroup);
+        await Clients.OthersInGroup(WorldManager.MainWorldGroup).SendAsync("PlayerJoined", selfSnapshot);
 
-        var session = sessions.CreateOrUpdateSession(Context.ConnectionId, normalizedName);
-        var room = rooms.CreateRoom(session);
-
-        await Groups.AddToGroupAsync(Context.ConnectionId, room.RoomCode);
-
-        return new RoomActionResult
+        return new WorldEnterResult
         {
             Success = true,
-            RoomCode = room.RoomCode,
             PlayerId = session.PlayerId,
+            ReconnectToken = session.ReconnectToken,
             CharacterName = session.CharacterName,
-            IsReady = room.IsReady,
-            Players = room.Players.Values.ToArray(),
+            Players = world.GetAllPlayers(),
         };
     }
 
-    public async Task<RoomActionResult> JoinRoom(string characterName, string roomCode)
-    {
-        var (isValid, normalizedName, error) = PlayerSessionManager.ValidateCharacterName(characterName);
-        if (!isValid)
-        {
-            return new RoomActionResult { Success = false, Error = error };
-        }
-
-        await DetachExistingSessionAsync();
-
-        var session = sessions.CreateOrUpdateSession(Context.ConnectionId, normalizedName);
-        var (joined, joinError, room) = rooms.JoinRoom(session, roomCode);
-        if (!joined || room is null)
-        {
-            sessions.RemoveByConnection(Context.ConnectionId);
-            return new RoomActionResult { Success = false, Error = joinError };
-        }
-
-        await Groups.AddToGroupAsync(Context.ConnectionId, room.RoomCode);
-
-        var players = room.Players.Values.ToArray();
-        await Clients.Group(room.RoomCode).SendAsync("RoomUpdated", new
-        {
-            roomCode = room.RoomCode,
-            isReady = room.IsReady,
-            players,
-        });
-
-        if (room.IsReady)
-        {
-            await Clients.Group(room.RoomCode).SendAsync("WorldReady", new
-            {
-                roomCode = room.RoomCode,
-                players,
-            });
-        }
-
-        return new RoomActionResult
-        {
-            Success = true,
-            RoomCode = room.RoomCode,
-            PlayerId = session.PlayerId,
-            CharacterName = session.CharacterName,
-            IsReady = room.IsReady,
-            Players = players,
-        };
-    }
-
-    public async Task<RoomActionResult> ReconnectToRoom(
+    public async Task<WorldEnterResult> ReconnectWorld(
         string playerId,
-        string characterName,
-        string roomCode)
+        string reconnectToken,
+        string characterName)
     {
-        var (isValid, normalizedName, error) = PlayerSessionManager.ValidateCharacterName(characterName);
-        if (!isValid || string.IsNullOrWhiteSpace(playerId))
+        var (ok, session, error) = sessions.TryReconnectSession(
+            Context.ConnectionId,
+            playerId,
+            reconnectToken,
+            characterName
+        );
+        if (!ok || session is null)
         {
-            return new RoomActionResult { Success = false, Error = error ?? "Invalid session." };
+            return new WorldEnterResult { Success = false, Error = error ?? "Reconnect failed." };
         }
 
-        await DetachExistingSessionAsync();
+        var selfSnapshot = world.EnterWorld(session);
+        await Groups.AddToGroupAsync(Context.ConnectionId, WorldManager.MainWorldGroup);
+        await Clients.OthersInGroup(WorldManager.MainWorldGroup).SendAsync("PlayerJoined", selfSnapshot);
 
-        var session = sessions.CreateOrUpdateSession(Context.ConnectionId, normalizedName, playerId);
-        var (ok, recError, room) = rooms.ReconnectPlayer(session, roomCode);
-        if (!ok || room is null)
-        {
-            sessions.RemoveByConnection(Context.ConnectionId);
-            return new RoomActionResult { Success = false, Error = recError };
-        }
-
-        await Groups.AddToGroupAsync(Context.ConnectionId, room.RoomCode);
-
-        var players = room.Players.Values.ToArray();
-        await Clients.OthersInGroup(room.RoomCode).SendAsync("RoomUpdated", new
-        {
-            roomCode = room.RoomCode,
-            isReady = room.IsReady,
-            players,
-        });
-
-        return new RoomActionResult
+        return new WorldEnterResult
         {
             Success = true,
-            RoomCode = room.RoomCode,
             PlayerId = session.PlayerId,
+            ReconnectToken = session.ReconnectToken,
             CharacterName = session.CharacterName,
-            IsReady = room.IsReady,
-            Players = players,
+            Players = world.GetAllPlayers(),
         };
-    }
-
-    public async Task LeaveRoom()
-    {
-        await DetachExistingSessionAsync();
     }
 
     public async Task SendMovement(MovementInputDto input)
     {
         var session = sessions.GetByConnection(Context.ConnectionId);
-        if (session is null || string.IsNullOrEmpty(session.RoomCode)) return;
-
-        var room = rooms.GetRoom(session.RoomCode);
-        if (room is null || !room.IsReady) return;
+        if (session is null) return;
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        if (gameState.TryApplyMovement(room, session, input, nowMs, out var snapshot) && snapshot is not null)
+        if (gameState.TryApplyMovement(world, session, input, nowMs, out var snapshot) && snapshot is not null)
         {
-            await Clients.OthersInGroup(room.RoomCode).SendAsync("PlayerMoved", snapshot);
+            await Clients.OthersInGroup(WorldManager.MainWorldGroup).SendAsync("PlayerMoved", snapshot);
+        }
+    }
+
+    public async Task RequestAttack(AttackRequestDto input)
+    {
+        var session = sessions.GetByConnection(Context.ConnectionId);
+        if (session is null) return;
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var resolution = combat.TryResolveAttack(world, session, input, nowMs);
+        if (!resolution.Success || resolution.Damaged is null) return;
+
+        await Clients.Group(WorldManager.MainWorldGroup).SendAsync("PlayerAttacked", new PlayerAttackedDto
+        {
+            AttackerPlayerId = session.PlayerId,
+            TargetPlayerId = input.TargetPlayerId,
+            ComboStep = input.ComboStep,
+        });
+
+        await Clients.Group(WorldManager.MainWorldGroup).SendAsync("PlayerDamaged", resolution.Damaged);
+
+        if (resolution.Died is not null)
+        {
+            await Clients.Group(WorldManager.MainWorldGroup).SendAsync("PlayerDied", resolution.Died);
+
+            var targetId = resolution.Died.PlayerId;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(CombatManager.RespawnDelaySeconds));
+                var respawned = combat.RespawnPlayer(world, targetId);
+                if (respawned is not null)
+                {
+                    await hubContext.Clients.Group(WorldManager.MainWorldGroup)
+                        .SendAsync("PlayerRespawned", new PlayerRespawnedDto { Player = respawned });
+                }
+            });
         }
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        await DetachExistingSessionAsync();
+        var session = sessions.MarkDisconnected(Context.ConnectionId);
+        if (session is not null)
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, WorldManager.MainWorldGroup);
+            if (world.RemovePlayer(session.PlayerId))
+            {
+                await Clients.Group(WorldManager.MainWorldGroup).SendAsync("PlayerLeft", new
+                {
+                    playerId = session.PlayerId,
+                    players = world.GetAllPlayers(),
+                });
+            }
+        }
         await base.OnDisconnectedAsync(exception);
     }
 }

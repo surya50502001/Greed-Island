@@ -24,7 +24,11 @@ export function RemotePlayer({ initialSnapshot, snapshotsRef }: RemotePlayerProp
   const rootRef = useRef<THREE.Group>(null);
   const modelRef = useRef<THREE.Group>(null);
   const auraRef = useRef<THREE.Group>(null);
+  const hpBarGroupRef = useRef<THREE.Group>(null);
+  const hpFillRef = useRef<THREE.Mesh>(null);
   const animCtrlRef = useRef(new CharacterAnimationController());
+  const prevHpRef = useRef(initialSnapshot.currentHealth);
+  const hitFlashRef = useRef(0);
   const rightFingersRef = useRef<
     Array<{ bone: THREE.Object3D; restQuat: THREE.Quaternion; isThumb: boolean }>
   >([]);
@@ -209,12 +213,47 @@ export function RemotePlayer({ initialSnapshot, snapshotsRef }: RemotePlayerProp
     }
   }, [clonedMats, isInvisible]);
 
-  useFrame(({ clock }, delta) => {
+  useFrame(({ camera, clock }, delta) => {
     const dt = Math.min(delta, 0.05);
     const snap = snapshotsRef.current[initialSnapshot.playerId] ?? initialSnapshot;
 
     if (snap.hasWeapon !== hasWeapon) setHasWeapon(snap.hasWeapon);
     if (snap.isInvisible !== isInvisible) setIsInvisible(snap.isInvisible);
+
+    if (snap.currentHealth < prevHpRef.current) {
+      hitFlashRef.current = 0.22;
+    }
+    prevHpRef.current = snap.currentHealth;
+    if (hitFlashRef.current > 0) {
+      hitFlashRef.current = Math.max(0, hitFlashRef.current - dt);
+    }
+
+    for (const mat of clonedMats) {
+      if ((mat as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+        const std = mat as THREE.MeshStandardMaterial;
+        if (hitFlashRef.current > 0) {
+          std.emissive.set('#ef4444');
+          std.emissiveIntensity = 1.1;
+        } else if (/Eye/i.test(std.name)) {
+          std.emissive.set('#38bdf8');
+          std.emissiveIntensity = 0.65;
+        } else {
+          std.emissive.set('#000000');
+          std.emissiveIntensity = 0;
+        }
+      }
+    }
+
+    if (hpBarGroupRef.current && hpFillRef.current) {
+      const showHp = snap.isAlive;
+      hpBarGroupRef.current.visible = showHp;
+      if (showHp) {
+        hpBarGroupRef.current.lookAt(camera.position);
+        const pct = Math.max(0.01, snap.currentHealth / Math.max(1, snap.maxHealth));
+        hpFillRef.current.scale.x = pct;
+        hpFillRef.current.position.x = -(1 - pct) * 0.5;
+      }
+    }
 
     if (rootRef.current) {
       targetPosRef.current.set(snap.x, snap.y, snap.z);
@@ -227,7 +266,9 @@ export function RemotePlayer({ initialSnapshot, snapshotsRef }: RemotePlayerProp
       rootRef.current.rotation.y = smoothYawRef.current;
     }
 
-    const locoState = (snap.locomotionState || 'Idle') as CharacterLocomotionState;
+    const locoState = (!snap.isAlive
+      ? 'Death'
+      : snap.locomotionState || 'Idle') as CharacterLocomotionState;
     animCtrlRef.current.update(locoState, snap.horizSpeed ?? 0, actions);
     mixer.update(dt);
 
@@ -275,7 +316,17 @@ export function RemotePlayer({ initialSnapshot, snapshotsRef }: RemotePlayerProp
       position={[initialSnapshot.x, initialSnapshot.y, initialSnapshot.z]}
       rotation={[0, initialSnapshot.yaw, 0]}
     >
-      <Nameplate name={initialSnapshot.characterName} accentColor="#c084fc" />
+      <Nameplate name={initialSnapshot.characterName} accentColor="#f87171" />
+      <group ref={hpBarGroupRef} position={[0, 1.92, 0]}>
+        <mesh>
+          <planeGeometry args={[1.04, 0.12]} />
+          <meshBasicMaterial color="#0f172a" transparent opacity={0.85} side={THREE.DoubleSide} />
+        </mesh>
+        <mesh ref={hpFillRef} position={[0, 0, 0.01]}>
+          <planeGeometry args={[1.0, 0.08]} />
+          <meshBasicMaterial color="#ef4444" side={THREE.DoubleSide} />
+        </mesh>
+      </group>
       <group ref={modelRef} position={[0, modelOffsetY, 0]} scale={normScale}>
         <primitive object={cloned} />
       </group>

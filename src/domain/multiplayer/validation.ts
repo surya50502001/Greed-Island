@@ -1,5 +1,4 @@
 const VALID_NAME_REGEX = /^[A-Za-z0-9 _-]+$/;
-const VALID_ROOM_CODE_REGEX = /^[A-Z0-9]{6}$/;
 
 export interface ValidationResult {
   valid: boolean;
@@ -29,18 +28,53 @@ export function validateCharacterName(raw: string): ValidationResult {
   return { valid: true, normalized: trimmed };
 }
 
-export function normalizeRoomCode(raw: string): string {
-  return raw.trim().toUpperCase();
+export interface SharedWorldPlayer {
+  playerId: string;
+  characterName: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  locomotionState: string;
+  horizSpeed: number;
+  isFlying: boolean;
+  hasWeapon: boolean;
+  isInvisible: boolean;
+  comboStep: number;
+  currentHealth: number;
+  maxHealth: number;
+  isAlive: boolean;
+  timestampMs: number;
 }
 
-export function validateRoomCode(raw: string): ValidationResult {
-  const normalized = normalizeRoomCode(raw);
-  if (!VALID_ROOM_CODE_REGEX.test(normalized)) {
-    return {
-      valid: false,
-      normalized,
-      error: 'Room code must be 6 letters/numbers.',
-    };
-  }
-  return { valid: true, normalized };
+export function upsertWorldPlayer(
+  players: SharedWorldPlayer[],
+  incoming: SharedWorldPlayer
+): SharedWorldPlayer[] {
+  const idx = players.findIndex((p) => p.playerId === incoming.playerId);
+  if (idx === -1) return [...players, incoming];
+  const next = [...players];
+  next[idx] = incoming;
+  return next;
+}
+
+export function removeWorldPlayer(
+  players: SharedWorldPlayer[],
+  playerId: string
+): SharedWorldPlayer[] {
+  return players.filter((p) => p.playerId !== playerId);
+}
+
+export function applyWorldDamage(
+  players: SharedWorldPlayer[],
+  targetPlayerId: string,
+  currentHealth: number,
+  maxHealth: number,
+  isAlive: boolean
+): SharedWorldPlayer[] {
+  return players.map((p) =>
+    p.playerId === targetPlayerId
+      ? { ...p, currentHealth, maxHealth, isAlive }
+      : p
+  );
 }
