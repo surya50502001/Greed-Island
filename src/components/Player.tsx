@@ -11,7 +11,12 @@ import {
   DEFAULT_CHARACTER_MODEL_URL,
   getMissingStatesForClips,
 } from '../gameplay/character/CharacterStates';
-import { EnergySword } from './EnergySword';
+import { SummonedWeaponMesh } from './SummonedWeaponMesh';
+import {
+  evaluateTravelCurve,
+  SpellTravelEvent,
+  SpellWeaponType,
+} from '../domain/cards/spellTravel';
 import {
   CombatVFXHandle,
   createAnimeSlashMaterial,
@@ -67,6 +72,9 @@ interface PlayerProps {
   isInvisible: boolean;
   isGrimoireOpen: boolean;
   isDead: boolean;
+  weaponType?: SpellWeaponType;
+  activeTravel?: SpellTravelEvent | null;
+  localPlayerId?: string;
   flightSpeedMultiplier?: number;
   weaponAttackBonus?: number;
   initialSpawn?: { x: number; y: number; z: number; yaw: number } | null;
@@ -107,6 +115,9 @@ export function Player({
   isInvisible,
   isGrimoireOpen,
   isDead,
+  weaponType = 'Sword',
+  activeTravel = null,
+  localPlayerId = 'local-player',
   flightSpeedMultiplier = 1,
   weaponAttackBonus = 0,
   initialSpawn = null,
@@ -563,14 +574,15 @@ export function Player({
       : [Math.PI / 2, 0, 0];
 
     return (
-      <EnergySword
+      <SummonedWeaponMesh
         ref={weaponGroupRef}
+        weaponType={weaponType}
         scale={handInvScale}
         position={pos}
         rotation={rot}
       />
     );
-  }, [hasWeapon, handInvScale, rightHandBone]);
+  }, [hasWeapon, weaponType, handInvScale, rightHandBone]);
 
   useFrame(({ clock }, delta) => {
     const rawDt = Math.min(delta, 0.05);
@@ -580,6 +592,56 @@ export function Player({
       dt = rawDt * 0.05;
     }
     const ctrl = controllerRef.current;
+
+    const travelIdx = activeTravel
+      ? activeTravel.participantPlayerIds.indexOf(localPlayerId)
+      : -1;
+    const isTravellingNow = Boolean(activeTravel && travelIdx >= 0);
+
+    if (isTravellingNow && activeTravel) {
+      const elapsed = performance.now() - (activeTravel.localStartPerfMs ?? performance.now());
+      const sample = evaluateTravelCurve(
+        activeTravel,
+        elapsed,
+        travelIdx,
+        activeTravel.participantPlayerIds.length
+      );
+      ctrl.position.set(sample.x, sample.y, sample.z);
+      ctrl.velocity.set(0, 0, 0);
+      ctrl.yaw = sample.yaw;
+      ctrl.clearInputs();
+      playerPosRef.current.copy(ctrl.position);
+      if (playerYawRef) playerYawRef.current = ctrl.yaw;
+      if (groupRef.current) {
+        groupRef.current.position.copy(ctrl.position);
+        groupRef.current.rotation.y = ctrl.yaw;
+      }
+      if (modelRef.current) {
+        modelRef.current.visible = !sample.isTransformedRay;
+      }
+
+      // Cinematic aerial follow camera
+      const flyDist = sample.phase === 'Flying' ? 11.5 : 6.8;
+      const desiredCamPos = new THREE.Vector3(
+        ctrl.position.x - Math.sin(sample.yaw) * flyDist,
+        ctrl.position.y + (sample.phase === 'Flying' ? 4.2 : 2.6),
+        ctrl.position.z - Math.cos(sample.yaw) * flyDist
+      );
+      camera.position.lerp(desiredCamPos, 1 - Math.exp(-6 * rawDt));
+      camera.lookAt(ctrl.position.x, ctrl.position.y + 1.0, ctrl.position.z);
+      if (camera instanceof THREE.PerspectiveCamera) {
+        const targetFov = sample.phase === 'Flying' ? 74 : 64;
+        if (Math.abs(camera.fov - targetFov) > 0.1) {
+          camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 1 - Math.exp(-5 * rawDt));
+          camera.updateProjectionMatrix();
+        }
+      }
+      return;
+    }
+
+    if (modelRef.current && !modelRef.current.visible) {
+      modelRef.current.visible = true;
+    }
 
     const step = ctrl.update(
       dt,

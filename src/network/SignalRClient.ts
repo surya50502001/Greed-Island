@@ -1,4 +1,12 @@
 import * as signalR from '@microsoft/signalr';
+import {
+  AccompanyInvite,
+  SpellTravelContext,
+  SpellTravelEvent,
+  SpellTravelResult,
+  WeaponSummonEvent,
+  WeaponSummonResult,
+} from '../domain/cards/spellTravel';
 import { SharedWorldPlayer } from '../domain/multiplayer/validation';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
@@ -70,6 +78,16 @@ export interface SignalRHandlers {
   onPlayerDamaged?: (ev: PlayerDamagedEvent) => void;
   onPlayerDied?: (ev: PlayerDiedEvent) => void;
   onPlayerRespawned?: (ev: PlayerRespawnedEvent) => void;
+  onSpellTravelStarted?: (ev: SpellTravelEvent) => void;
+  onSpellTravelCompleted?: (payload: { eventId: string; players: RemotePlayerSnapshot[] }) => void;
+  onWeaponSummonStarted?: (ev: WeaponSummonEvent) => void;
+  onAccompanyInviteReceived?: (invite: AccompanyInvite) => void;
+  onAccompanyInviteResponded?: (payload: {
+    inviteId: string;
+    playerId: string;
+    characterName: string;
+    accepted: boolean;
+  }) => void;
   onReconnected?: () => void;
   onDisconnected?: (err?: Error) => void;
 }
@@ -103,6 +121,11 @@ export class GreedSignalRClient {
     conn.on('PlayerDamaged', (ev) => handlers.onPlayerDamaged?.(ev));
     conn.on('PlayerDied', (ev) => handlers.onPlayerDied?.(ev));
     conn.on('PlayerRespawned', (ev) => handlers.onPlayerRespawned?.(ev));
+    conn.on('SpellTravelStarted', (ev) => handlers.onSpellTravelStarted?.(ev));
+    conn.on('SpellTravelCompleted', (payload) => handlers.onSpellTravelCompleted?.(payload));
+    conn.on('WeaponSummonStarted', (ev) => handlers.onWeaponSummonStarted?.(ev));
+    conn.on('AccompanyInviteReceived', (invite) => handlers.onAccompanyInviteReceived?.(invite));
+    conn.on('AccompanyInviteResponded', (payload) => handlers.onAccompanyInviteResponded?.(payload));
     conn.onreconnecting(() => handlers.onConnectionStateChange?.('reconnecting'));
     conn.onreconnected(() => {
       handlers.onConnectionStateChange?.('connected');
@@ -200,6 +223,58 @@ export class GreedSignalRClient {
       return;
     }
     void this.connection.invoke('RequestAttack', payload).catch(() => {});
+  }
+
+  public async getSpellTravelContext(): Promise<SpellTravelContext | null> {
+    if (!this.connection || this.connection.state !== signalR.HubConnectionState.Connected) {
+      return null;
+    }
+    return this.connection.invoke<SpellTravelContext>('GetSpellTravelContext');
+  }
+
+  public async inviteToAccompany(
+    targetPlayerIds: string[],
+    destinationLabel: string
+  ): Promise<AccompanyInvite | null> {
+    if (!this.connection || this.connection.state !== signalR.HubConnectionState.Connected) {
+      return null;
+    }
+    return this.connection.invoke<AccompanyInvite | null>(
+      'InviteToAccompany',
+      targetPlayerIds,
+      destinationLabel
+    );
+  }
+
+  public async respondAccompanyInvite(inviteId: string, accept: boolean): Promise<void> {
+    if (!this.connection || this.connection.state !== signalR.HubConnectionState.Connected) {
+      return;
+    }
+    await this.connection.invoke('RespondAccompanyInvite', inviteId, accept);
+  }
+
+  public async activateSpellTravel(request: {
+    cardId: string;
+    destinationType?: 'town' | 'player';
+    targetId?: string;
+    companionPlayerIds?: string[];
+  }): Promise<SpellTravelResult> {
+    if (!this.connection || this.connection.state !== signalR.HubConnectionState.Connected) {
+      return { success: false, error: 'Not connected to multiplayer server.' };
+    }
+    return this.connection.invoke<SpellTravelResult>('ActivateSpellTravel', {
+      cardId: request.cardId,
+      destinationType: request.destinationType ?? 'town',
+      targetId: request.targetId ?? null,
+      companionPlayerIds: request.companionPlayerIds ?? [],
+    });
+  }
+
+  public async activateSummonRandomWeapon(): Promise<WeaponSummonResult> {
+    if (!this.connection || this.connection.state !== signalR.HubConnectionState.Connected) {
+      return { success: false, error: 'Not connected to multiplayer server.' };
+    }
+    return this.connection.invoke<WeaponSummonResult>('ActivateSummonRandomWeapon');
   }
 
   public async disconnect(): Promise<void> {

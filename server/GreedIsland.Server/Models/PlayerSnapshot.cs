@@ -12,6 +12,7 @@ public sealed class PlayerSnapshot
     public double HorizSpeed { get; set; }
     public bool IsFlying { get; set; }
     public bool HasWeapon { get; set; }
+    public string WeaponType { get; set; } = "Sword";
     public bool IsInvisible { get; set; }
     public int ComboStep { get; set; }
     public int CurrentHealth { get; set; } = 100;

@@ -19,7 +19,13 @@ export function createEmptyLoadout(): ActiveCardLoadout {
 }
 
 export function createStarterInventory(): CardInventory {
-  return addCardToInventory(createEmptyInventory(), 'weapon', 1);
+  let inv = addCardToInventory(createEmptyInventory(), 'weapon', 1);
+  inv = addCardToInventory(inv, 'accompany', 1);
+  inv = addCardToInventory(inv, 'magnetic_force', 1);
+  inv = addCardToInventory(inv, 'return', 1);
+  inv = addCardToInventory(inv, 'drift', 1);
+  inv = addCardToInventory(inv, 'summon_weapon', 1);
+  return inv;
 }
 
 export function createStarterLoadout(): ActiveCardLoadout {

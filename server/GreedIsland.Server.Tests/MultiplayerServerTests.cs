@@ -304,12 +304,112 @@ public class MultiplayerServerTests
         Assert.Equal(1, recon.Players.Count(p => p.PlayerId == p2.Result.PlayerId));
     }
 
+    [Fact]
+    public async Task SpellCards_Return_Drift_MagneticForce_Accompany_And_SummonWeapon_AreServerAuthoritative()
+    {
+        var harness = new HubTestHarness();
+        var kai = await harness.EnterAsync("c-kai", "KAI");
+        var itachi = await harness.EnterAsync("c-itachi", "itachi");
+
+        // Both spawned at Starting Plaza within proximity -> met each other & visited starting_plaza
+        var kaiSnap = harness.World.GetPlayer(kai.Result.PlayerId!)!;
+        var itachiSnap = harness.World.GetPlayer(itachi.Result.PlayerId!)!;
+        var kaiSession = harness.Sessions.GetByConnection("c-kai")!;
+        var itachiSession = harness.Sessions.GetByConnection("c-itachi")!;
+
+        // 1. Return to unvisited town rejected; Return to starting_plaza succeeds
+        var badReturn = harness.CardTravel.TryStartTravel(
+            harness.World,
+            kaiSession,
+            new SpellTravelRequestDto { CardId = "return", TargetId = "crystal_peak" },
+            1000
+        );
+        Assert.False(badReturn.Success);
+
+        var okReturn = harness.CardTravel.TryStartTravel(
+            harness.World,
+            kaiSession,
+            new SpellTravelRequestDto { CardId = "return", TargetId = "starting_plaza" },
+            1000
+        );
+        Assert.True(okReturn.Success);
+        harness.CardTravel.CompleteTravel(harness.World, okReturn.TravelEvent!.EventId);
+
+        // 2. Drift picks an undiscovered town on the server (never starting_plaza)
+        var drift = harness.CardTravel.TryStartTravel(
+            harness.World,
+            kaiSession,
+            new SpellTravelRequestDto { CardId = "drift" },
+            20_000
+        );
+        Assert.True(drift.Success);
+        Assert.NotEqual("Starting Plaza", drift.TravelEvent!.DestinationLabel);
+        harness.CardTravel.CompleteTravel(harness.World, drift.TravelEvent.EventId);
+
+        // 3. Magnetic Force flies to met player's location without moving target
+        var prevItachiX = itachiSnap.X;
+        var prevItachiZ = itachiSnap.Z;
+        var mag = harness.CardTravel.TryStartTravel(
+            harness.World,
+            kaiSession,
+            new SpellTravelRequestDto
+            {
+                CardId = "magnetic_force",
+                DestinationType = "player",
+                TargetId = itachiSnap.PlayerId,
+            },
+            40_000
+        );
+        Assert.True(mag.Success);
+        Assert.Equal(itachiSnap.PlayerId, mag.TravelEvent!.TargetPlayerId);
+        Assert.Equal(prevItachiX, itachiSnap.X);
+        Assert.Equal(prevItachiZ, itachiSnap.Z);
+        harness.CardTravel.CompleteTravel(harness.World, mag.TravelEvent.EventId);
+
+        // 4. Accompany only includes companions who accepted invite
+        var invite = harness.CardTravel.CreateAccompanyInvite(harness.World, kaiSnap.PlayerId, "Starting Plaza", 60_000)!;
+        harness.CardTravel.RespondToAccompanyInvite(invite.InviteId, itachiSnap.PlayerId, true, 60_100);
+        var accompany = harness.CardTravel.TryStartTravel(
+            harness.World,
+            kaiSession,
+            new SpellTravelRequestDto
+            {
+                CardId = "accompany",
+                DestinationType = "town",
+                TargetId = "starting_plaza",
+                CompanionPlayerIds = [itachiSnap.PlayerId, "uninvited-fake-id"],
+            },
+            60_200
+        );
+        Assert.True(accompany.Success);
+        Assert.Equal(2, accompany.TravelEvent!.ParticipantPlayerIds.Length);
+        Assert.Contains(kaiSnap.PlayerId, accompany.TravelEvent.ParticipantPlayerIds);
+        Assert.Contains(itachiSnap.PlayerId, accompany.TravelEvent.ParticipantPlayerIds);
+        harness.CardTravel.CompleteTravel(harness.World, accompany.TravelEvent.EventId);
+
+        // 5. Summon Random Weapon selects from pool and updates player snapshot
+        var ws = harness.CardTravel.TrySummonRandomWeapon(harness.World, itachiSession, 80_000);
+        Assert.True(ws.Success);
+        Assert.Contains(ws.SummonEvent!.WeaponType, CardTravelManager.RandomWeaponPool);
+        Assert.True(itachiSnap.HasWeapon);
+        Assert.Equal(ws.SummonEvent.WeaponType, itachiSnap.WeaponType);
+    }
+
     private sealed class HubTestHarness
     {
         public PlayerSessionManager Sessions { get; } = new();
         public WorldManager World { get; } = new();
         public GameStateManager GameState { get; } = new();
         public CombatManager Combat { get; } = new();
+        public DestinationRegistry Destinations { get; } = new();
+        public PlayerEncounterService Encounters { get; }
+        public CardTravelManager CardTravel { get; }
+
+        public HubTestHarness()
+        {
+            Encounters = new PlayerEncounterService(Destinations);
+            CardTravel = new CardTravelManager(Destinations, Encounters);
+        }
         private readonly ConcurrentDictionary<string, HashSet<string>> _groups = new();
         private readonly ConcurrentDictionary<string, List<(string Method, object? Arg)>> _events = new();
         private readonly object _groupLock = new();
@@ -346,6 +446,9 @@ public class MultiplayerServerTests
                 World,
                 GameState,
                 Combat,
+                Destinations,
+                Encounters,
+                CardTravel,
                 hubCtx,
                 NullLogger<GameHub>.Instance
             )

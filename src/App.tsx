@@ -92,6 +92,19 @@ import {
 } from './network/SignalRClient';
 import { MultiplayerLobby } from './components/multiplayer/MultiplayerLobby';
 import { RemotePlayer } from './components/multiplayer/RemotePlayer';
+import { CardTravelEffects } from './components/cards/CardTravelEffects';
+import { AccompanyInviteBanner, SpellCardModal } from './components/cards/SpellCardModal';
+import {
+  AccompanyInvite,
+  createOfflineSpellTravelEvent,
+  getOfflineTowns,
+  SPELL_WEAPON_POOL,
+  SpellTravelCardId,
+  SpellTravelContext,
+  SpellTravelEvent,
+  SpellWeaponType,
+  WeaponSummonEvent,
+} from './domain/cards/spellTravel';
 
 const LOCAL_PLAYER_ID = 'local-player';
 
@@ -138,6 +151,18 @@ export function App() {
   const [cardLoadout, setCardLoadout] = useState<ActiveCardLoadout>(() =>
     createStarterLoadout()
   );
+  const [equippedWeaponType, setEquippedWeaponType] = useState<SpellWeaponType>('Sword');
+  const [activeTravels, setActiveTravels] = useState<SpellTravelEvent[]>([]);
+  const [activeWeaponSummons, setActiveWeaponSummons] = useState<WeaponSummonEvent[]>([]);
+  const [spellModalCard, setSpellModalCard] = useState<SpellTravelCardId | null>(null);
+  const [spellContext, setSpellContext] = useState<SpellTravelContext | null>(null);
+  const [spellModalError, setSpellModalError] = useState<string | null>(null);
+  const [spellModalBusy, setSpellModalBusy] = useState(false);
+  const [pendingAccompanyInvite, setPendingAccompanyInvite] = useState<AccompanyInvite | null>(null);
+  const [acceptedCompanions, setAcceptedCompanions] = useState<
+    Array<{ playerId: string; characterName: string }>
+  >([]);
+  const offlineVisitedTownsRef = useRef<Set<string>>(new Set(['starting_plaza']));
   const [cardCooldowns, setCardCooldowns] = useState<CardCooldownMap>({});
   const [, setCardMaterials] = useState<Record<string, number>>({});
 
@@ -298,6 +323,53 @@ export function App() {
           setMpRoomPlayers((prev) => upsertWorldPlayer(prev, p));
         }
       },
+      onSpellTravelStarted: (ev) => {
+        const stamped: SpellTravelEvent = { ...ev, localStartPerfMs: performance.now() };
+        setActiveTravels((prev) => [...prev.filter((t) => t.eventId !== ev.eventId), stamped]);
+        window.setTimeout(() => {
+          setActiveTravels((prev) => prev.filter((t) => t.eventId !== ev.eventId));
+        }, ev.totalDurationMs + 350);
+      },
+      onSpellTravelCompleted: (payload) => {
+        setActiveTravels((prev) => prev.filter((t) => t.eventId !== payload.eventId));
+        for (const p of payload.players) {
+          if (p.playerId !== mpSelfIdRef.current) {
+            remoteSnapshotsRef.current[p.playerId] = p;
+          }
+        }
+      },
+      onWeaponSummonStarted: (ev) => {
+        const stamped: WeaponSummonEvent = { ...ev, localStartPerfMs: performance.now() };
+        setActiveWeaponSummons((prev) => [...prev, stamped]);
+        if (ev.playerId === mpSelfIdRef.current) {
+          setEquippedWeaponType(ev.weaponType);
+          setHasWeapon(true);
+        } else {
+          const existing = remoteSnapshotsRef.current[ev.playerId];
+          if (existing) {
+            remoteSnapshotsRef.current[ev.playerId] = {
+              ...existing,
+              hasWeapon: true,
+              weaponType: ev.weaponType,
+            };
+          }
+        }
+        window.setTimeout(() => {
+          setActiveWeaponSummons((prev) => prev.filter((w) => w.eventId !== ev.eventId));
+        }, ev.durationMs + 200);
+      },
+      onAccompanyInviteReceived: (invite) => {
+        setPendingAccompanyInvite(invite);
+      },
+      onAccompanyInviteResponded: (res) => {
+        if (res.accepted) {
+          setAcceptedCompanions((prev) =>
+            prev.some((c) => c.playerId === res.playerId)
+              ? prev
+              : [...prev, { playerId: res.playerId, characterName: res.characterName }]
+          );
+        }
+      },
       onReconnected: () => {
         const selfId = mpSelfIdRef.current;
         const token = mpReconnectTokenRef.current;
@@ -404,6 +476,69 @@ export function App() {
     };
   }, []);
 
+  const startOfflineTravel = useCallback(
+    (ev: SpellTravelEvent) => {
+      setActiveTravels((prev) => [...prev, ev]);
+      window.setTimeout(() => {
+        setActiveTravels((prev) => prev.filter((t) => t.eventId !== ev.eventId));
+        const destTown = getOfflineTowns().find((t) => t.name === ev.destinationLabel);
+        if (destTown) offlineVisitedTownsRef.current.add(destTown.id);
+      }, ev.totalDurationMs + 100);
+    },
+    []
+  );
+
+  const handleConfirmSpellTravel = useCallback(
+    async (params: {
+      cardId: SpellTravelCardId;
+      destinationType: 'town' | 'player';
+      targetId: string;
+      companionPlayerIds: string[];
+    }) => {
+      setSpellModalBusy(true);
+      setSpellModalError(null);
+      try {
+        const entry = cardInventory.cards[params.cardId];
+        const level = entry?.level ?? 1;
+        const def = CARD_DEFINITIONS.find((c) => c.id === params.cardId);
+        const cd = getEffectiveCardCooldown(def, level);
+
+        if (isMultiplayerActive && signalRRef.current) {
+          const res = await signalRRef.current.activateSpellTravel(params);
+          if (!res.success) {
+            setSpellModalError(res.error ?? 'Spell activation failed.');
+            return;
+          }
+          if (cd > 0) setCardCooldowns((prev) => ({ ...prev, [params.cardId]: cd }));
+          setSpellModalCard(null);
+          setAcceptedCompanions([]);
+        } else {
+          const town = getOfflineTowns().find((t) => t.id === params.targetId);
+          if (!town) {
+            setSpellModalError('Select a valid destination.');
+            return;
+          }
+          const ev = createOfflineSpellTravelEvent(
+            params.cardId,
+            LOCAL_PLAYER_ID,
+            {
+              x: playerPosRef.current.x,
+              y: playerPosRef.current.y,
+              z: playerPosRef.current.z,
+            },
+            { x: town.x, y: town.y, z: town.z, label: town.name }
+          );
+          startOfflineTravel(ev);
+          if (cd > 0) setCardCooldowns((prev) => ({ ...prev, [params.cardId]: cd }));
+          setSpellModalCard(null);
+        }
+      } finally {
+        setSpellModalBusy(false);
+      }
+    },
+    [cardInventory, isMultiplayerActive, startOfflineTravel]
+  );
+
   const handleActivateCard = useCallback(
     (id: AnyCardId): boolean => {
       if (isDead) return false;
@@ -421,6 +556,77 @@ export function App() {
         setHasWeapon((prev) => !prev);
       } else if (id === 'invisibility') {
         setInvisTimer(getInvisibilityDuration(level, INVISIBILITY_DURATION));
+      } else if (id === 'accompany' || id === 'magnetic_force' || id === 'return') {
+        setSpellModalError(null);
+        setAcceptedCompanions([]);
+        setSpellModalCard(id as SpellTravelCardId);
+        if (isMultiplayerActive && signalRRef.current) {
+          void signalRRef.current.getSpellTravelContext().then((ctx) => {
+            if (ctx) setSpellContext(ctx);
+          });
+        } else {
+          setSpellContext({
+            visitedTownIds: Array.from(offlineVisitedTownsRef.current),
+            metPlayers: [],
+            allTowns: getOfflineTowns(),
+          });
+        }
+        return true;
+      } else if (id === 'drift') {
+        if (isMultiplayerActive && signalRRef.current) {
+          void signalRRef.current.activateSpellTravel({ cardId: 'drift' }).then((res) => {
+            if (res.success && cd > 0) {
+              setCardCooldowns((prev) => ({ ...prev, [id]: cd }));
+            }
+          });
+        } else {
+          const undiscovered = getOfflineTowns().filter(
+            (t) => !offlineVisitedTownsRef.current.has(t.id)
+          );
+          const pool = undiscovered.length > 0 ? undiscovered : getOfflineTowns();
+          const chosen = pool[Math.floor(Math.random() * pool.length)];
+          startOfflineTravel(
+            createOfflineSpellTravelEvent(
+              'drift',
+              LOCAL_PLAYER_ID,
+              {
+                x: playerPosRef.current.x,
+                y: playerPosRef.current.y,
+                z: playerPosRef.current.z,
+              },
+              { x: chosen.x, y: chosen.y, z: chosen.z, label: chosen.name }
+            )
+          );
+          if (cd > 0) setCardCooldowns((prev) => ({ ...prev, [id]: cd }));
+        }
+        return true;
+      } else if (id === 'summon_weapon') {
+        if (isMultiplayerActive && signalRRef.current) {
+          void signalRRef.current.activateSummonRandomWeapon().then((res) => {
+            if (res.success && cd > 0) {
+              setCardCooldowns((prev) => ({ ...prev, [id]: cd }));
+            }
+          });
+        } else {
+          const chosenWeapon =
+            SPELL_WEAPON_POOL[Math.floor(Math.random() * SPELL_WEAPON_POOL.length)];
+          const ev: WeaponSummonEvent = {
+            eventId: `offline-ws-${Date.now()}`,
+            playerId: LOCAL_PLAYER_ID,
+            weaponType: chosenWeapon,
+            startTimestampMs: Date.now(),
+            durationMs: 1500,
+            localStartPerfMs: performance.now(),
+          };
+          setActiveWeaponSummons((prev) => [...prev, ev]);
+          setEquippedWeaponType(chosenWeapon);
+          setHasWeapon(true);
+          window.setTimeout(() => {
+            setActiveWeaponSummons((prev) => prev.filter((w) => w.eventId !== ev.eventId));
+          }, ev.durationMs + 200);
+          if (cd > 0) setCardCooldowns((prev) => ({ ...prev, [id]: cd }));
+        }
+        return true;
       } else {
         return false;
       }
@@ -430,7 +636,7 @@ export function App() {
       }
       return true;
     },
-    [isDead, cardLoadout, cardCooldowns, cardInventory]
+    [isDead, cardLoadout, cardCooldowns, cardInventory, isMultiplayerActive, startOfflineTravel]
   );
 
   const handleEquipCard = useCallback(
@@ -878,6 +1084,13 @@ export function App() {
             isInvisible={isInvisible}
             isGrimoireOpen={isGrimoireOpen || isMapOpen || isLobbyOpen}
             isDead={isDead}
+            weaponType={equippedWeaponType}
+            activeTravel={
+              activeTravels.find((t) =>
+                t.participantPlayerIds.includes(mpLocalPlayerId ?? LOCAL_PLAYER_ID)
+              ) ?? null
+            }
+            localPlayerId={mpLocalPlayerId ?? LOCAL_PLAYER_ID}
             flightSpeedMultiplier={getFlightSpeedMultiplier(
               cardInventory.cards['flight']?.level ?? 1
             )}
@@ -903,8 +1116,26 @@ export function App() {
                   key={rp.playerId}
                   initialSnapshot={rp}
                   snapshotsRef={remoteSnapshotsRef}
+                  activeTravels={activeTravels}
                 />
               ))}
+          <CardTravelEffects
+            activeTravels={activeTravels}
+            activeWeaponSummons={activeWeaponSummons}
+            playerPositions={{
+              [mpLocalPlayerId ?? LOCAL_PLAYER_ID]: {
+                x: playerPosRef.current.x,
+                y: playerPosRef.current.y,
+                z: playerPosRef.current.z,
+              },
+              ...Object.fromEntries(
+                Object.entries(remoteSnapshotsRef.current).map(([pid, s]) => [
+                  pid,
+                  { x: s.x, y: s.y, z: s.z },
+                ])
+              ),
+            }}
+          />
         </Suspense>
         <Grimoire
           isOpen={isGrimoireOpen && !isDead}
@@ -1018,6 +1249,25 @@ export function App() {
       <RaidRewardModal
         grant={claimedRewardGrant}
         onClose={() => setClaimedRewardGrant(null)}
+      />
+      <SpellCardModal
+        cardId={spellModalCard}
+        context={spellContext}
+        acceptedCompanions={acceptedCompanions}
+        errorMessage={spellModalError}
+        isBusy={spellModalBusy}
+        onInviteCompanions={(targetIds, label) => {
+          void signalRRef.current?.inviteToAccompany(targetIds, label);
+        }}
+        onConfirmTravel={handleConfirmSpellTravel}
+        onClose={() => setSpellModalCard(null)}
+      />
+      <AccompanyInviteBanner
+        invite={pendingAccompanyInvite}
+        onRespond={(inviteId, accept) => {
+          void signalRRef.current?.respondAccompanyInvite(inviteId, accept);
+          setPendingAccompanyInvite(null);
+        }}
       />
       <MultiplayerLobby
         isOpen={isLobbyOpen}

@@ -39,6 +39,7 @@ export interface SharedWorldPlayer {
   horizSpeed: number;
   isFlying: boolean;
   hasWeapon: boolean;
+  weaponType?: string;
   isInvisible: boolean;
   comboStep: number;
   currentHealth: number;

@@ -20,6 +20,9 @@ public sealed class GameHub(
     WorldManager world,
     GameStateManager gameState,
     CombatManager combat,
+    DestinationRegistry destinations,
+    PlayerEncounterService encounters,
+    CardTravelManager cardTravel,
     IHubContext<GameHub> hubContext,
     ILogger<GameHub> logger) : Hub
 {
@@ -63,7 +66,9 @@ public sealed class GameHub(
         await Groups.AddToGroupAsync(Context.ConnectionId, WorldManager.MainWorldGroup);
 
         var session = sessions.CreateSession(Context.ConnectionId, normalizedName);
+        encounters.InitializePlayer(session.PlayerId);
         var (selfSnapshot, allPlayers) = world.EnterWorldAndSnapshot(session);
+        encounters.UpdateProximity(world, selfSnapshot);
 
         logger.LogInformation(
             "Player entered shared world: PlayerId={PlayerId} Name={CharacterName} ConnectionId={ConnectionId} WorldPlayers={Count}",
@@ -134,13 +139,155 @@ public sealed class GameHub(
     public async Task SendMovement(MovementInputDto input)
     {
         var session = sessions.GetByConnection(Context.ConnectionId);
-        if (session is null) return;
+        if (session is null || cardTravel.IsPlayerTravelling(session.PlayerId)) return;
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (gameState.TryApplyMovement(world, session, input, nowMs, out var snapshot) && snapshot is not null)
         {
+            encounters.UpdateProximity(world, snapshot);
             await Clients.OthersInGroup(WorldManager.MainWorldGroup).SendAsync("PlayerMoved", snapshot);
         }
+    }
+
+    public SpellTravelContextDto GetSpellTravelContext()
+    {
+        var session = sessions.GetByConnection(Context.ConnectionId);
+        if (session is null)
+        {
+            return new SpellTravelContextDto
+            {
+                VisitedTownIds = [DestinationRegistry.StartingTownId],
+                MetPlayers = [],
+                AllTowns = destinations.GetAllTowns(),
+            };
+        }
+
+        return new SpellTravelContextDto
+        {
+            VisitedTownIds = encounters.GetVisitedTownIds(session.PlayerId),
+            MetPlayers = encounters.GetMetPlayers(session.PlayerId, world),
+            AllTowns = destinations.GetAllTowns(),
+        };
+    }
+
+    public async Task<AccompanyInviteDto?> InviteToAccompany(string[] targetPlayerIds, string destinationLabel)
+    {
+        var session = sessions.GetByConnection(Context.ConnectionId);
+        if (session is null) return null;
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var invite = cardTravel.CreateAccompanyInvite(world, session.PlayerId, destinationLabel, nowMs);
+        if (invite is null) return null;
+
+        foreach (var targetId in targetPlayerIds.Distinct())
+        {
+            if (targetId == session.PlayerId) continue;
+            var targetSession = sessions.GetByPlayerId(targetId);
+            if (targetSession is not null && targetSession.IsConnected)
+            {
+                await Clients.Client(targetSession.ConnectionId).SendAsync("AccompanyInviteReceived", invite);
+            }
+        }
+        return invite;
+    }
+
+    public async Task RespondAccompanyInvite(string inviteId, bool accept)
+    {
+        var session = sessions.GetByConnection(Context.ConnectionId);
+        if (session is null) return;
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var (accepted, leaderId) = cardTravel.RespondToAccompanyInvite(inviteId, session.PlayerId, accept, nowMs);
+        if (leaderId is null) return;
+
+        var leaderSession = sessions.GetByPlayerId(leaderId);
+        if (leaderSession is not null && leaderSession.IsConnected)
+        {
+            await Clients.Client(leaderSession.ConnectionId).SendAsync("AccompanyInviteResponded", new
+            {
+                inviteId,
+                playerId = session.PlayerId,
+                characterName = session.CharacterName,
+                accepted,
+            });
+        }
+    }
+
+    public async Task<SpellTravelResultDto> ActivateSpellTravel(SpellTravelRequestDto request)
+    {
+        var session = sessions.GetByConnection(Context.ConnectionId);
+        if (session is null)
+        {
+            return new SpellTravelResultDto { Success = false, Error = "Not connected to world." };
+        }
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var result = cardTravel.TryStartTravel(world, session, request, nowMs);
+        if (!result.Success || result.TravelEvent is null)
+        {
+            logger.LogWarning(
+                "SpellTravel rejected: Card={CardId} PlayerId={PlayerId} Error={Error}",
+                request.CardId,
+                session.PlayerId,
+                result.Error
+            );
+            return result;
+        }
+
+        var ev = result.TravelEvent;
+        logger.LogInformation(
+            "SpellTravelStarted: EventId={EventId} Card={CardId} Caster={PlayerId} Participants={Count} Dest={Dest}",
+            ev.EventId,
+            ev.CardId,
+            ev.CasterPlayerId,
+            ev.ParticipantPlayerIds.Length,
+            ev.DestinationLabel
+        );
+
+        await Clients.Group(WorldManager.MainWorldGroup).SendAsync("SpellTravelStarted", ev);
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(ev.TotalDurationMs);
+            var arrived = cardTravel.CompleteTravel(world, ev.EventId);
+            if (arrived.Length > 0)
+            {
+                await hubContext.Clients.Group(WorldManager.MainWorldGroup)
+                    .SendAsync("SpellTravelCompleted", new
+                    {
+                        eventId = ev.EventId,
+                        players = arrived,
+                    });
+            }
+        });
+
+        return result;
+    }
+
+    public async Task<WeaponSummonResultDto> ActivateSummonRandomWeapon()
+    {
+        var session = sessions.GetByConnection(Context.ConnectionId);
+        if (session is null)
+        {
+            return new WeaponSummonResultDto { Success = false, Error = "Not connected to world." };
+        }
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var result = cardTravel.TrySummonRandomWeapon(world, session, nowMs);
+        if (!result.Success || result.SummonEvent is null)
+        {
+            return result;
+        }
+
+        logger.LogInformation(
+            "WeaponSummonStarted: EventId={EventId} PlayerId={PlayerId} Weapon={WeaponType}",
+            result.SummonEvent.EventId,
+            session.PlayerId,
+            result.SummonEvent.WeaponType
+        );
+
+        await Clients.Group(WorldManager.MainWorldGroup).SendAsync("WeaponSummonStarted", result.SummonEvent);
+        return result;
     }
 
     public async Task RequestAttack(AttackRequestDto input)
@@ -184,6 +331,7 @@ public sealed class GameHub(
         var session = sessions.MarkDisconnected(Context.ConnectionId);
         if (session is not null)
         {
+            cardTravel.RemoveDisconnectedPlayer(session.PlayerId);
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, WorldManager.MainWorldGroup);
             if (world.RemovePlayer(session.PlayerId))
             {

@@ -9,16 +9,25 @@ import {
   DEFAULT_CHARACTER_MODEL_URL,
 } from '../../gameplay/character/CharacterStates';
 import { buildAdventurerAnimationClips } from '../../gameplay/character/HumanAnimationClips';
-import { EnergySword } from '../EnergySword';
+import { SummonedWeaponMesh } from '../SummonedWeaponMesh';
+import {
+  evaluateTravelCurve,
+  SpellTravelEvent,
+} from '../../domain/cards/spellTravel';
 import { RemotePlayerSnapshot } from '../../network/SignalRClient';
 import { Nameplate } from './Nameplate';
 
 interface RemotePlayerProps {
   initialSnapshot: RemotePlayerSnapshot;
   snapshotsRef: React.MutableRefObject<Record<string, RemotePlayerSnapshot>>;
+  activeTravels?: SpellTravelEvent[];
 }
 
-export function RemotePlayer({ initialSnapshot, snapshotsRef }: RemotePlayerProps) {
+export function RemotePlayer({
+  initialSnapshot,
+  snapshotsRef,
+  activeTravels = [],
+}: RemotePlayerProps) {
   const { scene, animations } = useGLTF(DEFAULT_CHARACTER_MODEL_URL);
 
   const rootRef = useRef<THREE.Group>(null);
@@ -40,6 +49,7 @@ export function RemotePlayer({ initialSnapshot, snapshotsRef }: RemotePlayerProp
   const [rightHandBone, setRightHandBone] = useState<THREE.Object3D | null>(null);
   const [handInvScale, setHandInvScale] = useState<number>(1);
   const [hasWeapon, setHasWeapon] = useState<boolean>(initialSnapshot.hasWeapon);
+  const [weaponType, setWeaponType] = useState<string>(initialSnapshot.weaponType ?? 'Sword');
   const [isInvisible, setIsInvisible] = useState<boolean>(initialSnapshot.isInvisible);
 
   const { cloned, mixer, actions, normScale, modelOffsetY, clonedMats } = useMemo(() => {
@@ -218,7 +228,35 @@ export function RemotePlayer({ initialSnapshot, snapshotsRef }: RemotePlayerProp
     const snap = snapshotsRef.current[initialSnapshot.playerId] ?? initialSnapshot;
 
     if (snap.hasWeapon !== hasWeapon) setHasWeapon(snap.hasWeapon);
+    if ((snap.weaponType ?? 'Sword') !== weaponType) setWeaponType(snap.weaponType ?? 'Sword');
     if (snap.isInvisible !== isInvisible) setIsInvisible(snap.isInvisible);
+
+    // Check if this remote player is currently riding a Spell Travel event
+    const activeTravel = activeTravels.find((ev) =>
+      ev.participantPlayerIds.includes(initialSnapshot.playerId)
+    );
+    if (activeTravel) {
+      const idx = activeTravel.participantPlayerIds.indexOf(initialSnapshot.playerId);
+      const elapsed = performance.now() - (activeTravel.localStartPerfMs ?? performance.now());
+      const sample = evaluateTravelCurve(
+        activeTravel,
+        elapsed,
+        idx,
+        activeTravel.participantPlayerIds.length
+      );
+      if (rootRef.current) {
+        rootRef.current.position.set(sample.x, sample.y, sample.z);
+        rootRef.current.rotation.y = sample.yaw;
+      }
+      if (modelRef.current) {
+        modelRef.current.visible = !sample.isTransformedRay;
+      }
+      return;
+    }
+
+    if (modelRef.current && !modelRef.current.visible) {
+      modelRef.current.visible = true;
+    }
 
     if (snap.currentHealth < prevHpRef.current) {
       hitFlashRef.current = 0.22;
@@ -298,7 +336,8 @@ export function RemotePlayer({ initialSnapshot, snapshotsRef }: RemotePlayerProp
     if (!hasWeapon) return null;
     const isBiped = rightHandBone ? /Bip001/i.test(rightHandBone.name) : false;
     return (
-      <EnergySword
+      <SummonedWeaponMesh
+        weaponType={weaponType}
         scale={handInvScale}
         position={
           isBiped
@@ -308,7 +347,7 @@ export function RemotePlayer({ initialSnapshot, snapshotsRef }: RemotePlayerProp
         rotation={isBiped ? [0, 0, Math.PI / 2 + 0.16] : [Math.PI / 2, 0, 0]}
       />
     );
-  }, [hasWeapon, handInvScale, rightHandBone]);
+  }, [hasWeapon, weaponType, handInvScale, rightHandBone]);
 
   return (
     <group

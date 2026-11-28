@@ -1,4 +1,12 @@
-export type CardId = 'flight' | 'weapon' | 'invisibility';
+export type CardId =
+  | 'flight'
+  | 'weapon'
+  | 'invisibility'
+  | 'accompany'
+  | 'magnetic_force'
+  | 'return'
+  | 'drift'
+  | 'summon_weapon';
 
 /**
  * Extensible card identifier for the planned 20-card Greed Island catalog.
@@ -62,6 +70,66 @@ export const CARD_DEFINITIONS: CardDefinition[] = [
     maxLevel: 5,
     cooldownSeconds: 12,
     effectType: 'duration',
+  },
+  {
+    id: 'accompany',
+    name: 'Accompany',
+    category: 'TRANSPORT',
+    rarity: 'Epic',
+    description: 'Launch with companions as golden rays of light to a visited town or met hunter.',
+    accentColor: '#f59e0b',
+    glowColor: '#fef08a',
+    maxLevel: 5,
+    cooldownSeconds: 18,
+    effectType: 'instant',
+  },
+  {
+    id: 'magnetic_force',
+    name: 'Magnetic Force',
+    category: 'TRANSPORT',
+    rarity: 'Rare',
+    description: 'Race across the sky as a blue-white ray of light to a previously met hunter.',
+    accentColor: '#38bdf8',
+    glowColor: '#e0f2fe',
+    maxLevel: 5,
+    cooldownSeconds: 14,
+    effectType: 'instant',
+  },
+  {
+    id: 'return',
+    name: 'Return',
+    category: 'TRANSPORT',
+    rarity: 'Common',
+    description: 'Ascend in golden light and fly back to a previously visited town.',
+    accentColor: '#eab308',
+    glowColor: '#fef9c3',
+    maxLevel: 5,
+    cooldownSeconds: 10,
+    effectType: 'instant',
+  },
+  {
+    id: 'drift',
+    name: 'Drift',
+    category: 'TRANSPORT',
+    rarity: 'Rare',
+    description: 'Ride an unpredictable dimensional light arc to an undiscovered town.',
+    accentColor: '#c084fc',
+    glowColor: '#5eead4',
+    maxLevel: 5,
+    cooldownSeconds: 16,
+    effectType: 'instant',
+  },
+  {
+    id: 'summon_weapon',
+    name: 'Summon Weapon',
+    category: 'CONJURATION',
+    rarity: 'Epic',
+    description: 'Conjure a random arcane weapon (Sword, Greatsword, Spear, Axe, Dagger, or Bow).',
+    accentColor: '#fbbf24',
+    glowColor: '#38bdf8',
+    maxLevel: 5,
+    cooldownSeconds: 12,
+    effectType: 'instant',
   },
 ];
 

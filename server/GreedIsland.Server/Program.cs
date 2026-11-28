@@ -25,6 +25,9 @@ builder.Services.AddSingleton<PlayerSessionManager>();
 builder.Services.AddSingleton<WorldManager>();
 builder.Services.AddSingleton<GameStateManager>();
 builder.Services.AddSingleton<CombatManager>();
+builder.Services.AddSingleton<DestinationRegistry>();
+builder.Services.AddSingleton<PlayerEncounterService>();
+builder.Services.AddSingleton<CardTravelManager>();
 
 var app = builder.Build();
 
