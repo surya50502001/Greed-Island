@@ -13,7 +13,7 @@ interface MobileControlsProps {
   onVisibilityChange?: (visible: boolean) => void;
 }
 
-const JOYSTICK_RADIUS = 52;
+const JOYSTICK_RADIUS = 42;
 
 type HoldAction = 'jump' | 'descend' | 'block';
 
@@ -191,10 +191,10 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
     onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
   });
 
-  const btnSize = isPortrait ? 52 : 56;
+  const btnSize = isPortrait ? 50 : 48;
 
   const actionBtnStyle = (
-    accent = 'rgba(255,255,255,0.22)',
+    accent = 'rgba(255,255,255,0.2)',
     active = false
   ): React.CSSProperties => ({
     width: `${btnSize}px`,
@@ -203,17 +203,17 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
     minHeight: '48px',
     borderRadius: '50%',
     border: `1.5px solid ${active ? '#38bdf8' : accent}`,
-    background: active ? 'rgba(14, 116, 144, 0.82)' : 'rgba(15, 23, 42, 0.68)',
+    background: active ? 'rgba(14, 116, 144, 0.72)' : 'rgba(11, 14, 21, 0.48)',
     color: '#f8fafc',
-    fontSize: '12px',
+    fontSize: '11px',
     fontWeight: 700,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '2px',
-    backdropFilter: 'blur(8px)',
-    boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+    gap: '1px',
+    backdropFilter: 'blur(6px)',
+    boxShadow: '0 3px 12px rgba(0,0,0,0.32)',
     touchAction: 'none',
     userSelect: 'none',
     WebkitTouchCallout: 'none',
@@ -221,39 +221,95 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   });
 
   const bottomOffset = isPortrait
-    ? 'calc(84px + env(safe-area-inset-bottom, 0px))'
-    : 'calc(22px + env(safe-area-inset-bottom, 0px))';
+    ? 'calc(64px + env(safe-area-inset-bottom, 0px))'
+    : 'calc(14px + env(safe-area-inset-bottom, 0px))';
 
   return (
     <>
-      {/* Top-right toggle so desktop or mobile users can show/hide touch panel anytime */}
-      <button
-        type="button"
-        onContextMenu={(e) => e.preventDefault()}
-        onClick={() => {
-          manualOverrideRef.current = true;
-          setVisible((v) => !v);
-        }}
+      {/* Top-right compact utility bar: Map, Book, and Touch toggle */}
+      <div
         style={{
           position: 'fixed',
-          top: 'calc(14px + env(safe-area-inset-top, 0px))',
-          right: 'calc(14px + env(safe-area-inset-right, 0px))',
+          top: 'calc(10px + env(safe-area-inset-top, 0px))',
+          right: 'calc(10px + env(safe-area-inset-right, 0px))',
           zIndex: 25,
-          padding: '6px 12px',
-          minHeight: '34px',
-          borderRadius: '999px',
-          border: '1px solid rgba(255, 255, 255, 0.2)',
-          background: 'rgba(15, 23, 42, 0.72)',
-          color: '#e2e8f0',
-          fontSize: '12px',
-          fontWeight: 600,
-          backdropFilter: 'blur(8px)',
-          touchAction: 'manipulation',
-          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
         }}
       >
-        {visible ? '🎮 Hide Touch' : '🎮 Touch Pad'}
-      </button>
+        {visible && (
+          <>
+            <button
+              type="button"
+              aria-label="Toggle Island Map"
+              onContextMenu={(e) => e.preventDefault()}
+              onClick={onToggleMap}
+              style={{
+                padding: '5px 10px',
+                minHeight: '32px',
+                borderRadius: '999px',
+                border: `1px solid ${isMapOpen ? '#38bdf8' : 'rgba(212, 175, 55, 0.35)'}`,
+                background: isMapOpen ? 'rgba(14, 116, 144, 0.8)' : 'rgba(11, 14, 21, 0.76)',
+                color: '#f1f5f9',
+                fontSize: '11px',
+                fontWeight: 700,
+                backdropFilter: 'blur(6px)',
+                touchAction: 'manipulation',
+                cursor: 'pointer',
+              }}
+            >
+              🗺️ {isMapOpen ? 'Close' : 'Map'}
+            </button>
+
+            <button
+              type="button"
+              aria-label="Toggle Grimoire"
+              onContextMenu={(e) => e.preventDefault()}
+              onClick={onToggleGrimoire}
+              style={{
+                padding: '5px 10px',
+                minHeight: '32px',
+                borderRadius: '999px',
+                border: `1px solid ${isGrimoireOpen ? '#c084fc' : 'rgba(212, 175, 55, 0.35)'}`,
+                background: isGrimoireOpen ? 'rgba(88, 28, 135, 0.8)' : 'rgba(11, 14, 21, 0.76)',
+                color: '#f1f5f9',
+                fontSize: '11px',
+                fontWeight: 700,
+                backdropFilter: 'blur(6px)',
+                touchAction: 'manipulation',
+                cursor: 'pointer',
+              }}
+            >
+              📖 {isGrimoireOpen ? 'Close' : 'Book'}
+            </button>
+          </>
+        )}
+
+        <button
+          type="button"
+          onContextMenu={(e) => e.preventDefault()}
+          onClick={() => {
+            manualOverrideRef.current = true;
+            setVisible((v) => !v);
+          }}
+          style={{
+            padding: '5px 10px',
+            minHeight: '32px',
+            borderRadius: '999px',
+            border: '1px solid rgba(255, 255, 255, 0.18)',
+            background: 'rgba(11, 14, 21, 0.76)',
+            color: '#cbd5e1',
+            fontSize: '11px',
+            fontWeight: 600,
+            backdropFilter: 'blur(6px)',
+            touchAction: 'manipulation',
+            cursor: 'pointer',
+          }}
+        >
+          {visible ? 'Hide' : '🎮 Touch'}
+        </button>
+      </div>
 
       {visible && (
         <div
@@ -296,15 +352,15 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
               }}
               style={{
                 position: 'absolute',
-                left: 'calc(18px + env(safe-area-inset-left, 0px))',
+                left: 'calc(14px + env(safe-area-inset-left, 0px))',
                 bottom: bottomOffset,
-                width: `${JOYSTICK_RADIUS * 2 + 16}px`,
-                height: `${JOYSTICK_RADIUS * 2 + 16}px`,
+                width: `${JOYSTICK_RADIUS * 2 + 12}px`,
+                height: `${JOYSTICK_RADIUS * 2 + 12}px`,
                 borderRadius: '50%',
-                background: 'rgba(15, 23, 42, 0.52)',
-                border: '1.5px solid rgba(255, 255, 255, 0.28)',
-                boxShadow: 'inset 0 0 18px rgba(0,0,0,0.45)',
-                backdropFilter: 'blur(6px)',
+                background: 'rgba(11, 14, 21, 0.34)',
+                border: '1.5px solid rgba(255, 255, 255, 0.22)',
+                boxShadow: 'inset 0 0 14px rgba(0,0,0,0.35)',
+                backdropFilter: 'blur(4px)',
                 pointerEvents: 'auto',
                 touchAction: 'none',
                 display: 'flex',
@@ -312,18 +368,18 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
                 justifyContent: 'center',
               }}
             >
-              <span style={{ position: 'absolute', top: '6px', fontSize: '10px', color: 'rgba(226,232,240,0.65)', pointerEvents: 'none' }}>⌃</span>
-              <span style={{ position: 'absolute', bottom: '6px', fontSize: '10px', color: 'rgba(226,232,240,0.65)', pointerEvents: 'none' }}>⌄</span>
-              <span style={{ position: 'absolute', left: '8px', fontSize: '10px', color: 'rgba(226,232,240,0.65)', pointerEvents: 'none' }}>‹</span>
-              <span style={{ position: 'absolute', right: '8px', fontSize: '10px', color: 'rgba(226,232,240,0.65)', pointerEvents: 'none' }}>›</span>
+              <span style={{ position: 'absolute', top: '4px', fontSize: '9px', color: 'rgba(226,232,240,0.55)', pointerEvents: 'none' }}>⌃</span>
+              <span style={{ position: 'absolute', bottom: '4px', fontSize: '9px', color: 'rgba(226,232,240,0.55)', pointerEvents: 'none' }}>⌄</span>
+              <span style={{ position: 'absolute', left: '6px', fontSize: '9px', color: 'rgba(226,232,240,0.55)', pointerEvents: 'none' }}>‹</span>
+              <span style={{ position: 'absolute', right: '6px', fontSize: '9px', color: 'rgba(226,232,240,0.55)', pointerEvents: 'none' }}>›</span>
               <div
                 style={{
-                  width: '48px',
-                  height: '48px',
+                  width: '40px',
+                  height: '40px',
                   borderRadius: '50%',
-                  background: 'rgba(125, 211, 252, 0.8)',
-                  border: '2px solid #ffffff',
-                  boxShadow: '0 0 14px rgba(56, 189, 248, 0.55)',
+                  background: 'rgba(125, 211, 252, 0.72)',
+                  border: '1.5px solid rgba(255,255,255,0.9)',
+                  boxShadow: '0 0 10px rgba(56, 189, 248, 0.45)',
                   transform: `translate(${knobOffset.x}px, ${knobOffset.y}px)`,
                   transition: stickPointerId.current === null ? 'transform 0.12s ease-out' : 'none',
                 }}
@@ -331,43 +387,19 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
             </div>
           )}
 
-          {/* Right Action Cluster */}
+          {/* Right Action Cluster (compact combat & movement thumb arc) */}
           <div
             style={{
               position: 'absolute',
-              right: 'calc(18px + env(safe-area-inset-right, 0px))',
+              right: 'calc(14px + env(safe-area-inset-right, 0px))',
               bottom: bottomOffset,
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'flex-end',
-              gap: '10px',
+              gap: '8px',
               pointerEvents: 'auto',
             }}
           >
-            {/* Grimoire [G] & Island Map [M] buttons (always accessible) */}
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                type="button"
-                aria-label="Toggle Island Map"
-                onContextMenu={(e) => e.preventDefault()}
-                onClick={onToggleMap}
-                style={actionBtnStyle('rgba(56, 189, 248, 0.65)', isMapOpen)}
-              >
-                <span style={{ fontSize: '17px', lineHeight: 1 }}>🗺️</span>
-                <span style={{ fontSize: '10px' }}>{isMapOpen ? 'Close' : 'Map'}</span>
-              </button>
-
-              <button
-                type="button"
-                aria-label="Toggle Grimoire"
-                onContextMenu={(e) => e.preventDefault()}
-                onClick={onToggleGrimoire}
-                style={actionBtnStyle('rgba(192, 132, 252, 0.7)', isGrimoireOpen)}
-              >
-                <span style={{ fontSize: '17px', lineHeight: 1 }}>📖</span>
-                <span style={{ fontSize: '10px' }}>{isGrimoireOpen ? 'Close' : 'Book'}</span>
-              </button>
-            </div>
 
             {!overlayBlocking && (
               <div

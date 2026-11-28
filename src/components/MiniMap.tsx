@@ -78,7 +78,7 @@ export const MiniMap: React.FC<MiniMapProps> = ({
 
   if (hidden) return null;
 
-  const size = isCompact ? 104 : 132;
+  const size = isCompact ? 84 : 128;
   const half = size / 2;
   const activeRaids = raids.filter(
     (r) => r.status === 'Upcoming' || r.status === 'Gathering' || r.status === 'InProgress'

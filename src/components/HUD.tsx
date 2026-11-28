@@ -32,7 +32,6 @@ interface HUDProps {
   cooldowns?: CardCooldownMap;
   onActivateSlotCard?: (cardId: AnyCardId) => void;
   multiplayerStatus?: ConnectionStatus | null;
-  onlinePlayerCount?: number | null;
   onRevive: () => void;
 }
 
@@ -50,12 +49,10 @@ export const HUD: React.FC<HUDProps> = ({
   comboStep = 0,
   comboAttackName = '',
   comboTimer = 0,
-  inventory,
   loadout,
   cooldowns = {},
   onActivateSlotCard,
   multiplayerStatus = null,
-  onlinePlayerCount = null,
   onRevive,
 }) => {
   const isInvisible = invisTimer > 0;
@@ -73,7 +70,7 @@ export const HUD: React.FC<HUDProps> = ({
         flexDirection: 'column',
         justifyContent: 'space-between',
         alignItems: 'center',
-        padding: '18px 24px 24px',
+        padding: hideKeyboardHints ? '10px 12px 10px' : '18px 24px 24px',
         zIndex: 10,
       }}
     >
@@ -87,21 +84,24 @@ export const HUD: React.FC<HUDProps> = ({
           gap: '10px',
         }}
       >
-        {/* Player Health Bar (positioned cleanly below the circular top-left MiniMap) */}
+        {/* Player Health Bar (beside MiniMap on mobile so joystick has full clearance; below MiniMap on desktop) */}
         <div
           style={{
+            position: hideKeyboardHints ? 'fixed' : 'static',
+            top: hideKeyboardHints ? 'calc(12px + env(safe-area-inset-top, 0px))' : undefined,
+            left: hideKeyboardHints ? 'calc(104px + env(safe-area-inset-left, 0px))' : undefined,
             alignSelf: 'flex-start',
-            marginTop: hideKeyboardHints ? '114px' : '142px',
-            width: hideKeyboardHints ? '118px' : '156px',
-            padding: '5px 9px',
+            marginTop: hideKeyboardHints ? undefined : '138px',
+            width: hideKeyboardHints ? '124px' : '156px',
+            padding: hideKeyboardHints ? '4px 8px' : '5px 9px',
             borderRadius: '8px',
-            background: 'rgba(11, 14, 21, 0.9)',
-            border: '1.5px solid rgba(212, 175, 55, 0.45)',
-            boxShadow: '0 4px 14px rgba(0,0,0,0.45)',
+            background: 'rgba(11, 14, 21, 0.84)',
+            border: '1px solid rgba(212, 175, 55, 0.42)',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
             backdropFilter: 'blur(8px)',
             display: 'flex',
             flexDirection: 'column',
-            gap: '4px',
+            gap: '3px',
           }}
         >
           <div
@@ -139,34 +139,30 @@ export const HUD: React.FC<HUDProps> = ({
           </div>
         </div>
 
-        {/* Active ability pills */}
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
-          {multiplayerStatus && (
+        {/* Active ability pills (only show connection alert if reconnecting/disconnected; no cluttering Online pill) */}
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+          {multiplayerStatus && multiplayerStatus !== 'connected' && (
             <div
               style={{
-                padding: '6px 12px',
+                padding: '4px 10px',
                 borderRadius: '999px',
                 background: 'rgba(15, 23, 42, 0.78)',
                 border: `1px solid ${
-                  multiplayerStatus === 'connected'
-                    ? 'rgba(74, 222, 128, 0.65)'
-                    : multiplayerStatus === 'reconnecting'
-                      ? 'rgba(250, 204, 21, 0.7)'
-                      : 'rgba(248, 113, 113, 0.7)'
+                  multiplayerStatus === 'reconnecting'
+                    ? 'rgba(250, 204, 21, 0.7)'
+                    : 'rgba(248, 113, 113, 0.7)'
                 }`,
                 color: '#f8fafc',
-                fontSize: '12px',
+                fontSize: '11px',
                 fontWeight: 600,
                 backdropFilter: 'blur(8px)',
               }}
             >
-              {multiplayerStatus === 'connected'
-                ? `🟢 Online${onlinePlayerCount !== null ? ` · 👤 ${onlinePlayerCount}` : ''}`
-                : multiplayerStatus === 'reconnecting'
-                  ? '🟡 Reconnecting...'
-                  : multiplayerStatus === 'connecting'
-                    ? '🟡 Connecting...'
-                    : '🔴 Disconnected'}
+              {multiplayerStatus === 'reconnecting'
+                ? '🟡 Reconnecting...'
+                : multiplayerStatus === 'connecting'
+                  ? '🟡 Connecting...'
+                  : '🔴 Disconnected'}
             </div>
           )}
 
@@ -455,7 +451,6 @@ export const HUD: React.FC<HUDProps> = ({
               const def = cardId
                 ? CARD_DEFINITIONS.find((c) => c.id === cardId)
                 : undefined;
-              const entry = cardId && inventory ? inventory.cards[cardId] : undefined;
               const cd = cardId ? cooldowns[cardId] ?? 0 : 0;
               const isCardActive =
                 (cardId === 'flight' && isFlying) ||
@@ -475,36 +470,36 @@ export const HUD: React.FC<HUDProps> = ({
                   onContextMenu={(e) => e.preventDefault()}
                   onClick={() => cardId && cd <= 0 && onActivateSlotCard?.(cardId)}
                   style={{
-                    minWidth: hideKeyboardHints ? '62px' : '82px',
-                    minHeight: hideKeyboardHints ? '54px' : '56px',
-                    padding: hideKeyboardHints ? '6px 8px' : '6px 10px',
-                    borderRadius: '10px',
-                    border: `1.5px solid ${
+                    minWidth: hideKeyboardHints ? '52px' : '78px',
+                    minHeight: hideKeyboardHints ? '40px' : '52px',
+                    padding: hideKeyboardHints ? '4px 6px' : '6px 10px',
+                    borderRadius: '8px',
+                    border: `1px solid ${
                       isCardActive
                         ? '#f59e0b'
                         : cardId
                           ? 'rgba(212, 175, 55, 0.45)'
-                          : 'rgba(148, 163, 184, 0.24)'
+                          : 'rgba(148, 163, 184, 0.22)'
                     }`,
                     background: isCardActive
                       ? 'rgba(120, 53, 15, 0.72)'
-                      : 'rgba(11, 14, 21, 0.88)',
-                    boxShadow: isCardActive ? '0 0 14px rgba(245, 158, 11, 0.35)' : '0 4px 12px rgba(0,0,0,0.45)',
+                      : 'rgba(11, 14, 21, 0.76)',
+                    boxShadow: isCardActive ? '0 0 12px rgba(245, 158, 11, 0.35)' : '0 3px 10px rgba(0,0,0,0.4)',
                     color: cardId ? '#fef3c7' : '#64748b',
-                    fontSize: hideKeyboardHints ? '10px' : '11px',
+                    fontSize: hideKeyboardHints ? '9px' : '11px',
                     fontWeight: 700,
                     cursor: cardId && cd <= 0 ? 'pointer' : 'default',
-                    backdropFilter: 'blur(8px)',
+                    backdropFilter: 'blur(6px)',
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: '2px',
+                    gap: '1px',
                     opacity: cd > 0 ? 0.65 : 1,
                     touchAction: 'manipulation',
                   }}
                 >
-                  <span style={{ fontSize: '15px', lineHeight: 1 }}>
+                  <span style={{ fontSize: hideKeyboardHints ? '12px' : '15px', lineHeight: 1 }}>
                     {cardId === 'weapon'
                       ? '⚔️'
                       : cardId === 'flight'
@@ -515,13 +510,9 @@ export const HUD: React.FC<HUDProps> = ({
                             ? '✦'
                             : '+'}
                   </span>
-                  <span style={{ fontSize: '9px', color: cardId ? '#e2c275' : '#475569' }}>
-                    {hideKeyboardHints ? '' : `[${idx + 1}] `}
-                    {entry ? `Lv.${entry.level}` : ''}
-                  </span>
                   <span style={{ textTransform: 'capitalize' }}>{label}</span>
                   {cd > 0 && (
-                    <span style={{ fontSize: '10px', color: '#fde047' }}>
+                    <span style={{ fontSize: '9px', color: '#fde047' }}>
                       {Math.ceil(cd)}s
                     </span>
                   )}
