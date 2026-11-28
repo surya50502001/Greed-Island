@@ -410,118 +410,131 @@ export const HUD: React.FC<HUDProps> = ({
         </div>
       )}
 
-      {/* Bottom-center airborne flight hints & Grimoire summon prompt (hidden when mobile touch pad is visible) */}
-      {!hideKeyboardHints && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-          {isFlying && !isGrimoireOpen && !isDead && (
-            <div
-              style={{
-                padding: '6px 14px',
-                borderRadius: '999px',
-                background: 'rgba(10, 22, 40, 0.72)',
-                border: '1px solid rgba(56, 189, 248, 0.4)',
-                color: '#bae6fd',
-                fontSize: '12px',
-                fontWeight: 500,
-                backdropFilter: 'blur(8px)',
-              }}
-            >
-              WASD Fly &nbsp;•&nbsp; Space Ascend &nbsp;•&nbsp; C Descend &nbsp;•&nbsp; Shift Boost
-            </div>
-          )}
+      {/* Bottom-center Active Card Slots (PC & Mobile) + Keyboard Hints (Desktop only) */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '8px',
+          paddingBottom: hideKeyboardHints ? 'env(safe-area-inset-bottom, 0px)' : undefined,
+        }}
+      >
+        {!hideKeyboardHints && isFlying && !isGrimoireOpen && !isDead && (
+          <div
+            style={{
+              padding: '6px 14px',
+              borderRadius: '999px',
+              background: 'rgba(10, 22, 40, 0.72)',
+              border: '1px solid rgba(56, 189, 248, 0.4)',
+              color: '#bae6fd',
+              fontSize: '12px',
+              fontWeight: 500,
+              backdropFilter: 'blur(8px)',
+            }}
+          >
+            WASD Fly &nbsp;•&nbsp; Space Ascend &nbsp;•&nbsp; C Descend &nbsp;•&nbsp; Shift Boost
+          </div>
+        )}
 
-          {!isDead && loadout && (
-            <div
-              style={{
-                display: 'flex',
-                gap: '8px',
-                pointerEvents: 'auto',
-              }}
-            >
-              {loadout.slots.map((cardId, idx) => {
-                const def = cardId
-                  ? CARD_DEFINITIONS.find((c) => c.id === cardId)
-                  : undefined;
-                const entry = cardId && inventory ? inventory.cards[cardId] : undefined;
-                const cd = cardId ? cooldowns[cardId] ?? 0 : 0;
-                const isCardActive =
-                  (cardId === 'flight' && isFlying) ||
-                  (cardId === 'weapon' && hasWeapon) ||
-                  (cardId === 'invisibility' && isInvisible);
-                const label = def
-                  ? def.name
-                  : cardId
-                    ? cardId.replace(/_/g, ' ')
-                    : 'Empty';
+        {!isDead && loadout && (
+          <div
+            style={{
+              display: 'flex',
+              gap: hideKeyboardHints ? '6px' : '8px',
+              pointerEvents: 'auto',
+              flexWrap: 'wrap',
+              justifyContent: 'center',
+            }}
+          >
+            {loadout.slots.map((cardId, idx) => {
+              const def = cardId
+                ? CARD_DEFINITIONS.find((c) => c.id === cardId)
+                : undefined;
+              const entry = cardId && inventory ? inventory.cards[cardId] : undefined;
+              const cd = cardId ? cooldowns[cardId] ?? 0 : 0;
+              const isCardActive =
+                (cardId === 'flight' && isFlying) ||
+                (cardId === 'weapon' && hasWeapon) ||
+                (cardId === 'invisibility' && isInvisible);
+              const label = def
+                ? def.name
+                : cardId
+                  ? cardId.replace(/_/g, ' ')
+                  : 'Empty';
 
-                return (
-                  <button
-                    key={idx}
-                    type="button"
-                    disabled={!cardId || cd > 0}
-                    onClick={() => cardId && cd <= 0 && onActivateSlotCard?.(cardId)}
-                    style={{
-                      minWidth: '82px',
-                      padding: '6px 10px',
-                      borderRadius: '10px',
-                      border: `1.5px solid ${
-                        isCardActive
-                          ? '#4ade80'
-                          : cardId
-                            ? 'rgba(148, 163, 184, 0.45)'
-                            : 'rgba(148, 163, 184, 0.2)'
-                      }`,
-                      background: isCardActive
-                        ? 'rgba(20, 83, 45, 0.78)'
-                        : 'rgba(15, 23, 42, 0.78)',
-                      color: cardId ? '#f8fafc' : '#64748b',
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      cursor: cardId && cd <= 0 ? 'pointer' : 'default',
-                      backdropFilter: 'blur(8px)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      gap: '2px',
-                      opacity: cd > 0 ? 0.65 : 1,
-                    }}
-                  >
-                    <span style={{ fontSize: '9px', color: '#94a3b8' }}>
-                      [{idx + 1}] {entry ? `Lv.${entry.level}` : ''}
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  disabled={!cardId || cd > 0}
+                  onContextMenu={(e) => e.preventDefault()}
+                  onClick={() => cardId && cd <= 0 && onActivateSlotCard?.(cardId)}
+                  style={{
+                    minWidth: hideKeyboardHints ? '58px' : '82px',
+                    minHeight: hideKeyboardHints ? '48px' : undefined,
+                    padding: hideKeyboardHints ? '6px 8px' : '6px 10px',
+                    borderRadius: '10px',
+                    border: `1.5px solid ${
+                      isCardActive
+                        ? '#4ade80'
+                        : cardId
+                          ? 'rgba(148, 163, 184, 0.45)'
+                          : 'rgba(148, 163, 184, 0.2)'
+                    }`,
+                    background: isCardActive
+                      ? 'rgba(20, 83, 45, 0.78)'
+                      : 'rgba(15, 23, 42, 0.78)',
+                    color: cardId ? '#f8fafc' : '#64748b',
+                    fontSize: hideKeyboardHints ? '10px' : '11px',
+                    fontWeight: 700,
+                    cursor: cardId && cd <= 0 ? 'pointer' : 'default',
+                    backdropFilter: 'blur(8px)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '2px',
+                    opacity: cd > 0 ? 0.65 : 1,
+                    touchAction: 'manipulation',
+                  }}
+                >
+                  <span style={{ fontSize: '9px', color: '#94a3b8' }}>
+                    {hideKeyboardHints ? '' : `[${idx + 1}] `}
+                    {entry ? `Lv.${entry.level}` : ''}
+                  </span>
+                  <span style={{ textTransform: 'capitalize' }}>{label}</span>
+                  {cd > 0 && (
+                    <span style={{ fontSize: '10px', color: '#fde047' }}>
+                      {Math.ceil(cd)}s
                     </span>
-                    <span style={{ textTransform: 'capitalize' }}>{label}</span>
-                    {cd > 0 && (
-                      <span style={{ fontSize: '10px', color: '#fde047' }}>
-                        {Math.ceil(cd)}s
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
-          {!isDead && (
-            <div
-              style={{
-                padding: '7px 16px',
-                borderRadius: '999px',
-                background: 'rgba(15, 23, 42, 0.68)',
-                border: '1px solid rgba(255, 255, 255, 0.16)',
-                color: '#cbd5e1',
-                fontSize: '12px',
-                fontWeight: 500,
-                letterSpacing: '0.03em',
-                backdropFilter: 'blur(8px)',
-              }}
-            >
-              {isGrimoireOpen
-                ? 'Click a card to cast  •  Press G or Esc to close'
-                : 'Press [G] Grimoire  •  [M] Island Map'}
-            </div>
-          )}
-        </div>
-      )}
+        {!hideKeyboardHints && !isDead && (
+          <div
+            style={{
+              padding: '7px 16px',
+              borderRadius: '999px',
+              background: 'rgba(15, 23, 42, 0.68)',
+              border: '1px solid rgba(255, 255, 255, 0.16)',
+              color: '#cbd5e1',
+              fontSize: '12px',
+              fontWeight: 500,
+              letterSpacing: '0.03em',
+              backdropFilter: 'blur(8px)',
+            }}
+          >
+            {isGrimoireOpen
+              ? 'Click a card to cast  •  Press G or Esc to close'
+              : 'Press [G] Grimoire  •  [M] Island Map'}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

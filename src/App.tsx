@@ -66,6 +66,11 @@ import {
 } from './domain/bosses/encounter';
 import { claimRaidRewards } from './domain/rewards/rules';
 import { RaidRewardGrant } from './domain/rewards/types';
+import {
+  GameActionId,
+  getSlotIndexForAction,
+  resolveKeyboardGameAction,
+} from './domain/input/controls';
 import { RaidBossActor } from './components/raids/RaidBossActor';
 import { RaidNotifications } from './components/raids/RaidNotifications';
 import { IslandMapModal } from './components/raids/IslandMapModal';
@@ -686,45 +691,53 @@ export function App() {
     [handleDamageNumber, applyRewardGrantToInventory, isMultiplayerActive]
   );
 
-  // Grimoire & Island Map keybindings + Revival
+  const dispatchGameAction = useCallback(
+    (action: GameActionId) => {
+      if (isDead) {
+        if (action === 'revive') handleRevive();
+        return;
+      }
+      switch (action) {
+        case 'toggleGrimoire':
+          setIsMapOpen(false);
+          setIsGrimoireOpen((prev) => !prev);
+          break;
+        case 'toggleMap':
+          setIsGrimoireOpen(false);
+          setIsMapOpen((prev) => !prev);
+          break;
+        case 'closeOverlay':
+          setIsGrimoireOpen(false);
+          setIsMapOpen(false);
+          break;
+        default: {
+          const slotIdx = getSlotIndexForAction(action);
+          if (slotIdx !== null) {
+            const cardId = cardLoadout.slots[slotIdx];
+            if (cardId) handleActivateCard(cardId);
+          }
+          break;
+        }
+      }
+    },
+    [isDead, handleRevive, cardLoadout, handleActivateCard]
+  );
+
+  // Grimoire & Island Map keybindings + Revival (unified with MobileControls)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
-      if (isDead) {
-        if (e.code === 'KeyR') {
-          handleRevive();
-        }
-        return;
-      }
-      if (e.code === 'KeyG') {
-        setIsMapOpen(false);
-        setIsGrimoireOpen((prev) => !prev);
-      } else if (e.code === 'KeyM') {
-        setIsGrimoireOpen(false);
-        setIsMapOpen((prev) => !prev);
-      } else if (e.code === 'Escape') {
-        setIsGrimoireOpen(false);
-        setIsMapOpen(false);
-      } else if (!isGrimoireOpen && !isMapOpen) {
-        const slotIdx: ActiveCardSlotIndex | null =
-          e.code === 'Digit1'
-            ? 0
-            : e.code === 'Digit2'
-              ? 1
-              : e.code === 'Digit3'
-                ? 2
-                : e.code === 'Digit4'
-                  ? 3
-                  : null;
-        if (slotIdx !== null) {
-          const cardId = cardLoadout.slots[slotIdx];
-          if (cardId) handleActivateCard(cardId);
-        }
-      }
+      const action = resolveKeyboardGameAction(
+        e.code,
+        isDead,
+        isGrimoireOpen,
+        isMapOpen
+      );
+      if (action) dispatchGameAction(action);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isDead, handleRevive, isGrimoireOpen, isMapOpen, cardLoadout, handleActivateCard]);
+  }, [isDead, isGrimoireOpen, isMapOpen, dispatchGameAction]);
 
   const activeSceneRaid =
     raidsRef.current.find((r) => r.status === 'InProgress') ??
@@ -993,10 +1006,10 @@ export function App() {
         isFlying={isFlying}
         hasWeapon={hasWeapon}
         isGrimoireOpen={isGrimoireOpen || isDead}
+        isMapOpen={isMapOpen}
         onVisibilityChange={setIsTouchVisible}
-        onToggleGrimoire={() => {
-          if (!isDead) setIsGrimoireOpen((prev) => !prev);
-        }}
+        onToggleGrimoire={() => dispatchGameAction('toggleGrimoire')}
+        onToggleMap={() => dispatchGameAction('toggleMap')}
       />
     </div>
   );

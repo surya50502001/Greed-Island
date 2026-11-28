@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { isTouchControlPreferred } from '../domain/input/controls';
 import { PlayerTouchBridge } from './Player';
 
 interface MobileControlsProps {
@@ -6,43 +7,80 @@ interface MobileControlsProps {
   isFlying: boolean;
   hasWeapon: boolean;
   isGrimoireOpen: boolean;
+  isMapOpen?: boolean;
   onToggleGrimoire: () => void;
+  onToggleMap: () => void;
   onVisibilityChange?: (visible: boolean) => void;
 }
 
 const JOYSTICK_RADIUS = 52;
+
+type HoldAction = 'jump' | 'descend' | 'block';
 
 export const MobileControls: React.FC<MobileControlsProps> = ({
   touchBridgeRef,
   isFlying,
   hasWeapon,
   isGrimoireOpen,
+  isMapOpen = false,
   onToggleGrimoire,
+  onToggleMap,
   onVisibilityChange,
 }) => {
-  const [visible, setVisible] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return (
-      window.matchMedia('(pointer: coarse)').matches ||
-      'ontouchstart' in window ||
-      window.innerWidth <= 900
-    );
-  });
+  const [visible, setVisible] = useState<boolean>(() => isTouchControlPreferred());
+  const [isPortrait, setIsPortrait] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : false
+  );
+  const manualOverrideRef = useRef(false);
+
+  // React to device capability / viewport orientation changes unless user manually toggled
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const coarseMql = window.matchMedia?.('(pointer: coarse)');
+    const handleEnvChange = () => {
+      setIsPortrait(window.innerHeight > window.innerWidth);
+      if (!manualOverrideRef.current) {
+        setVisible(isTouchControlPreferred());
+      }
+    };
+    coarseMql?.addEventListener?.('change', handleEnvChange);
+    window.addEventListener('resize', handleEnvChange);
+    window.addEventListener('orientationchange', handleEnvChange);
+    return () => {
+      coarseMql?.removeEventListener?.('change', handleEnvChange);
+      window.removeEventListener('resize', handleEnvChange);
+      window.removeEventListener('orientationchange', handleEnvChange);
+    };
+  }, []);
 
   useEffect(() => {
     onVisibilityChange?.(visible);
   }, [visible, onVisibilityChange]);
 
   const [sprintLocked, setSprintLocked] = useState(false);
+  const [heldActions, setHeldActions] = useState<Record<HoldAction, boolean>>({
+    jump: false,
+    descend: false,
+    block: false,
+  });
   const [knobOffset, setKnobOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const stickBaseRef = useRef<HTMLDivElement>(null);
   const stickPointerId = useRef<number | null>(null);
+  const actionPointerIds = useRef<Record<HoldAction, number | null>>({
+    jump: null,
+    descend: null,
+    block: null,
+  });
 
-  // Release all touch inputs (including sprint) when hidden, Grimoire opens, or window loses focus
+  const overlayBlocking = isGrimoireOpen || isMapOpen;
+
+  // Release all touch inputs when hidden, overlay opens, or window loses focus
   useEffect(() => {
     const releaseAll = () => {
       setKnobOffset({ x: 0, y: 0 });
       stickPointerId.current = null;
+      actionPointerIds.current = { jump: null, descend: null, block: null };
+      setHeldActions({ jump: false, descend: false, block: false });
       setSprintLocked(false);
       touchBridgeRef.current?.setMove(0, 0);
       touchBridgeRef.current?.setAction('sprint', false);
@@ -51,7 +89,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
       touchBridgeRef.current?.setAction('block', false);
     };
 
-    if (!visible || isGrimoireOpen) {
+    if (!visible || overlayBlocking) {
       releaseAll();
     }
 
@@ -66,14 +104,18 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
       window.removeEventListener('blur', handleBlur);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [visible, isGrimoireOpen, touchBridgeRef]);
+  }, [visible, overlayBlocking, touchBridgeRef]);
 
   // Release state-specific held buttons when gameplay state changes (e.g. flight or weapon toggled)
   useEffect(() => {
     if (!hasWeapon || isFlying) {
+      actionPointerIds.current.block = null;
+      setHeldActions((prev) => (prev.block ? { ...prev, block: false } : prev));
       touchBridgeRef.current?.setAction('block', false);
     }
     if (!isFlying) {
+      actionPointerIds.current.descend = null;
+      setHeldActions((prev) => (prev.descend ? { ...prev, descend: false } : prev));
       touchBridgeRef.current?.setAction('descend', false);
     }
   }, [hasWeapon, isFlying, touchBridgeRef]);
@@ -108,12 +150,60 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
     touchBridgeRef.current?.setMove(0, 0);
   };
 
-  const actionBtnStyle = (accent = 'rgba(255,255,255,0.22)', active = false): React.CSSProperties => ({
-    width: '56px',
-    height: '56px',
+  const bindHoldHandlers = (action: HoldAction) => ({
+    onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore if pointer capture is unavailable in synthetic test environments
+      }
+      actionPointerIds.current[action] = e.pointerId;
+      setHeldActions((prev) => ({ ...prev, [action]: true }));
+      touchBridgeRef.current?.setAction(action, true);
+    },
+    onPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (actionPointerIds.current[action] !== e.pointerId) return;
+      try {
+        if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        // Ignore
+      }
+      actionPointerIds.current[action] = null;
+      setHeldActions((prev) => ({ ...prev, [action]: false }));
+      touchBridgeRef.current?.setAction(action, false);
+    },
+    onPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (actionPointerIds.current[action] !== e.pointerId) return;
+      actionPointerIds.current[action] = null;
+      setHeldActions((prev) => ({ ...prev, [action]: false }));
+      touchBridgeRef.current?.setAction(action, false);
+    },
+    onLostPointerCapture: () => {
+      if (actionPointerIds.current[action] === null) return;
+      actionPointerIds.current[action] = null;
+      setHeldActions((prev) => ({ ...prev, [action]: false }));
+      touchBridgeRef.current?.setAction(action, false);
+    },
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+  });
+
+  const btnSize = isPortrait ? 52 : 56;
+
+  const actionBtnStyle = (
+    accent = 'rgba(255,255,255,0.22)',
+    active = false
+  ): React.CSSProperties => ({
+    width: `${btnSize}px`,
+    height: `${btnSize}px`,
+    minWidth: '48px',
+    minHeight: '48px',
     borderRadius: '50%',
     border: `1.5px solid ${active ? '#38bdf8' : accent}`,
-    background: active ? 'rgba(14, 116, 144, 0.78)' : 'rgba(15, 23, 42, 0.68)',
+    background: active ? 'rgba(14, 116, 144, 0.82)' : 'rgba(15, 23, 42, 0.68)',
     color: '#f8fafc',
     fontSize: '12px',
     fontWeight: 700,
@@ -126,21 +216,31 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
     boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
     touchAction: 'none',
     userSelect: 'none',
+    WebkitTouchCallout: 'none',
     cursor: 'pointer',
   });
+
+  const bottomOffset = isPortrait
+    ? 'calc(84px + env(safe-area-inset-bottom, 0px))'
+    : 'calc(22px + env(safe-area-inset-bottom, 0px))';
 
   return (
     <>
       {/* Top-right toggle so desktop or mobile users can show/hide touch panel anytime */}
       <button
         type="button"
-        onClick={() => setVisible((v) => !v)}
+        onContextMenu={(e) => e.preventDefault()}
+        onClick={() => {
+          manualOverrideRef.current = true;
+          setVisible((v) => !v);
+        }}
         style={{
           position: 'fixed',
-          top: '18px',
-          right: '18px',
+          top: 'calc(14px + env(safe-area-inset-top, 0px))',
+          right: 'calc(14px + env(safe-area-inset-right, 0px))',
           zIndex: 25,
           padding: '6px 12px',
+          minHeight: '34px',
           borderRadius: '999px',
           border: '1px solid rgba(255, 255, 255, 0.2)',
           background: 'rgba(15, 23, 42, 0.72)',
@@ -148,6 +248,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
           fontSize: '12px',
           fontWeight: 600,
           backdropFilter: 'blur(8px)',
+          touchAction: 'manipulation',
           cursor: 'pointer',
         }}
       >
@@ -156,6 +257,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
 
       {visible && (
         <div
+          onContextMenu={(e) => e.preventDefault()}
           style={{
             position: 'fixed',
             inset: 0,
@@ -163,13 +265,19 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
             zIndex: 20,
           }}
         >
-          {/* Left Virtual Joystick (hidden while Grimoire is open) */}
-          {!isGrimoireOpen && (
+          {/* Left Virtual Joystick (hidden while Grimoire/Map is open) */}
+          {!overlayBlocking && (
             <div
               ref={stickBaseRef}
+              onContextMenu={(e) => e.preventDefault()}
               onPointerDown={(e) => {
+                e.preventDefault();
                 e.stopPropagation();
-                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                try {
+                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                } catch {
+                  // Ignore
+                }
                 stickPointerId.current = e.pointerId;
                 updateJoystick(e.clientX, e.clientY);
               }}
@@ -183,10 +291,13 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
               onPointerCancel={(e) => {
                 if (stickPointerId.current === e.pointerId) resetJoystick(e);
               }}
+              onLostPointerCapture={() => {
+                if (stickPointerId.current !== null) resetJoystick();
+              }}
               style={{
                 position: 'absolute',
-                left: '26px',
-                bottom: '34px',
+                left: 'calc(18px + env(safe-area-inset-left, 0px))',
+                bottom: bottomOffset,
                 width: `${JOYSTICK_RADIUS * 2 + 16}px`,
                 height: `${JOYSTICK_RADIUS * 2 + 16}px`,
                 borderRadius: '50%',
@@ -219,36 +330,53 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
           <div
             style={{
               position: 'absolute',
-              right: '24px',
-              bottom: '32px',
+              right: 'calc(18px + env(safe-area-inset-right, 0px))',
+              bottom: bottomOffset,
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'flex-end',
-              gap: '12px',
+              gap: '10px',
               pointerEvents: 'auto',
             }}
           >
-            {/* Grimoire button (always accessible to open or close) */}
-            <button
-              type="button"
-              onClick={onToggleGrimoire}
-              style={actionBtnStyle('rgba(192, 132, 252, 0.7)', isGrimoireOpen)}
-            >
-              <span style={{ fontSize: '18px', lineHeight: 1 }}>📖</span>
-              <span style={{ fontSize: '10px' }}>{isGrimoireOpen ? 'Close' : 'Book'}</span>
-            </button>
+            {/* Grimoire [G] & Island Map [M] buttons (always accessible) */}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                aria-label="Toggle Island Map"
+                onContextMenu={(e) => e.preventDefault()}
+                onClick={onToggleMap}
+                style={actionBtnStyle('rgba(56, 189, 248, 0.65)', isMapOpen)}
+              >
+                <span style={{ fontSize: '17px', lineHeight: 1 }}>🗺️</span>
+                <span style={{ fontSize: '10px' }}>{isMapOpen ? 'Close' : 'Map'}</span>
+              </button>
 
-            {!isGrimoireOpen && (
+              <button
+                type="button"
+                aria-label="Toggle Grimoire"
+                onContextMenu={(e) => e.preventDefault()}
+                onClick={onToggleGrimoire}
+                style={actionBtnStyle('rgba(192, 132, 252, 0.7)', isGrimoireOpen)}
+              >
+                <span style={{ fontSize: '17px', lineHeight: 1 }}>📖</span>
+                <span style={{ fontSize: '10px' }}>{isGrimoireOpen ? 'Close' : 'Book'}</span>
+              </button>
+            </div>
+
+            {!overlayBlocking && (
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(2, 56px)',
+                  gridTemplateColumns: `repeat(2, ${btnSize}px)`,
                   gap: '10px',
                 }}
               >
-                {/* Sprint toggle */}
+                {/* Sprint toggle [Shift] */}
                 <button
                   type="button"
+                  aria-label="Toggle Sprint"
+                  onContextMenu={(e) => e.preventDefault()}
                   onClick={() => {
                     const next = !sprintLocked;
                     setSprintLocked(next);
@@ -257,31 +385,27 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
                   style={actionBtnStyle('rgba(56, 189, 248, 0.5)', sprintLocked)}
                 >
                   <span style={{ fontSize: '16px', lineHeight: 1 }}>⚡</span>
-                  <span style={{ fontSize: '10px' }}>Sprint</span>
+                  <span style={{ fontSize: '10px' }}>{isFlying ? 'Boost' : 'Sprint'}</span>
                 </button>
 
-                {/* Jump / Ascend */}
+                {/* Jump / Ascend [Space] */}
                 <button
                   type="button"
-                  onPointerDown={() => touchBridgeRef.current?.setAction('jump', true)}
-                  onPointerUp={() => touchBridgeRef.current?.setAction('jump', false)}
-                  onPointerCancel={() => touchBridgeRef.current?.setAction('jump', false)}
-                  onPointerLeave={() => touchBridgeRef.current?.setAction('jump', false)}
-                  style={actionBtnStyle('rgba(125, 211, 252, 0.6)')}
+                  aria-label={isFlying ? 'Ascend' : 'Jump'}
+                  {...bindHoldHandlers('jump')}
+                  style={actionBtnStyle('rgba(125, 211, 252, 0.6)', heldActions.jump)}
                 >
                   <span style={{ fontSize: '16px', lineHeight: 1 }}>⬆️</span>
                   <span style={{ fontSize: '10px' }}>{isFlying ? 'Ascend' : 'Jump'}</span>
                 </button>
 
-                {/* Dodge or Flight Descend */}
+                {/* Dodge [Q] or Flight Descend [C] */}
                 {isFlying ? (
                   <button
                     type="button"
-                    onPointerDown={() => touchBridgeRef.current?.setAction('descend', true)}
-                    onPointerUp={() => touchBridgeRef.current?.setAction('descend', false)}
-                    onPointerCancel={() => touchBridgeRef.current?.setAction('descend', false)}
-                    onPointerLeave={() => touchBridgeRef.current?.setAction('descend', false)}
-                    style={actionBtnStyle('rgba(56, 189, 248, 0.6)')}
+                    aria-label="Descend"
+                    {...bindHoldHandlers('descend')}
+                    style={actionBtnStyle('rgba(56, 189, 248, 0.6)', heldActions.descend)}
                   >
                     <span style={{ fontSize: '16px', lineHeight: 1 }}>⬇️</span>
                     <span style={{ fontSize: '10px' }}>Descend</span>
@@ -289,7 +413,13 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
                 ) : (
                   <button
                     type="button"
-                    onPointerDown={() => touchBridgeRef.current?.triggerDodge()}
+                    aria-label="Dodge"
+                    onContextMenu={(e) => e.preventDefault()}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      touchBridgeRef.current?.triggerDodge();
+                    }}
                     style={actionBtnStyle('rgba(255, 255, 255, 0.3)')}
                   >
                     <span style={{ fontSize: '16px', lineHeight: 1 }}>💨</span>
@@ -297,11 +427,17 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
                   </button>
                 )}
 
-                {/* Attack (when weapon summoned) */}
+                {/* Attack [Left Click] (when weapon summoned) */}
                 {hasWeapon && (
                   <button
                     type="button"
-                    onPointerDown={() => touchBridgeRef.current?.triggerAttack()}
+                    aria-label="Attack"
+                    onContextMenu={(e) => e.preventDefault()}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      touchBridgeRef.current?.triggerAttack();
+                    }}
                     style={actionBtnStyle('rgba(34, 211, 238, 0.75)')}
                   >
                     <span style={{ fontSize: '17px', lineHeight: 1 }}>⚔️</span>
@@ -309,15 +445,13 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
                   </button>
                 )}
 
-                {/* Block (when weapon summoned & grounded) */}
+                {/* Block [F] (when weapon summoned & grounded) */}
                 {hasWeapon && !isFlying && (
                   <button
                     type="button"
-                    onPointerDown={() => touchBridgeRef.current?.setAction('block', true)}
-                    onPointerUp={() => touchBridgeRef.current?.setAction('block', false)}
-                    onPointerCancel={() => touchBridgeRef.current?.setAction('block', false)}
-                    onPointerLeave={() => touchBridgeRef.current?.setAction('block', false)}
-                    style={actionBtnStyle('rgba(251, 191, 36, 0.65)')}
+                    aria-label="Block"
+                    {...bindHoldHandlers('block')}
+                    style={actionBtnStyle('rgba(251, 191, 36, 0.65)', heldActions.block)}
                   >
                     <span style={{ fontSize: '16px', lineHeight: 1 }}>🛡️</span>
                     <span style={{ fontSize: '10px' }}>Block</span>
