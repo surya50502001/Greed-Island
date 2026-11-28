@@ -792,21 +792,31 @@ export function GrimoireOverlay({
   }, [currentSpread, totalSpreads]);
 
   // Card click handler
-  const handleCardSelect = useCallback((id: AnyCardId) => {
-    setSelectedCardId((prev) => (prev === id ? null : id));
-  }, []);
-
-  // Activate from inspection panel
+  // Activate from card click or inspection panel and close Grimoire
   const handleActivate = useCallback((id: AnyCardId) => {
     if (!canActivateCard(id, loadout, cooldowns).allowed) return;
     const idx = cards.findIndex((c) => c.id === id);
     setConfirmCard(cards[idx]?.name ?? '');
     setSelectedCardId(id);
+    onActivateCard(id);
     setTimeout(() => {
-      onActivateCard(id);
       onClose();
-    }, 500);
+    }, 180);
   }, [cards, loadout, cooldowns, onActivateCard, onClose]);
+
+  const handleCardSelect = useCallback((id: AnyCardId) => {
+    const isMobileViewport =
+      typeof window !== 'undefined' &&
+      (window.matchMedia?.('(pointer: coarse)').matches || window.innerWidth <= 960);
+
+    // On mobile, tapping an equipped, ready card immediately activates it and closes the Grimoire
+    if (isMobileViewport && canActivateCard(id, loadout, cooldowns).allowed) {
+      handleActivate(id);
+      return;
+    }
+
+    setSelectedCardId((prev) => (prev === id ? null : id));
+  }, [loadout, cooldowns, handleActivate]);
 
   if (!isOpen) return null;
 
@@ -841,7 +851,12 @@ export function GrimoireOverlay({
   }
 
   return (
-    <div className="grimoire-overlay" onMouseDown={(e) => e.stopPropagation()}>
+    <div
+      className="grimoire-overlay"
+      onMouseDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
       {/* Confirmation flash */}
       {confirmCard && (
         <div className="grimoire-confirm-flash" key={confirmCard}>
@@ -886,7 +901,12 @@ export function GrimoireOverlay({
                     type="button"
                     disabled={!slotCardId}
                     onClick={() => {
-                      if (slotCardId) setSelectedCardId(slotCardId);
+                      if (!slotCardId) return;
+                      if (canActivateCard(slotCardId, loadout, cooldowns).allowed) {
+                        handleActivate(slotCardId);
+                      } else {
+                        setSelectedCardId(slotCardId);
+                      }
                     }}
                     className="grimoire-loadout-chip-main"
                   >
