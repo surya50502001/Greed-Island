@@ -20,6 +20,8 @@ import {
 import { applyEnemyDamage } from '../domain/enemies/ai';
 import { calculateMeleeDamage } from '../domain/combat/rules';
 import { Vec3 } from '../domain/math/vec3';
+import { MovementInputPayload } from '../network/SignalRClient';
+import { Nameplate } from './multiplayer/Nameplate';
 
 export interface MeleeHitCheckParams {
   attackId: number;
@@ -64,6 +66,11 @@ interface PlayerProps {
   isInvisible: boolean;
   isGrimoireOpen: boolean;
   isDead: boolean;
+  flightSpeedMultiplier?: number;
+  weaponAttackBonus?: number;
+  initialSpawn?: { x: number; y: number; z: number; yaw: number } | null;
+  characterName?: string | null;
+  onLocalStateBroadcast?: (payload: MovementInputPayload) => void;
   combatBridgeRef?: React.MutableRefObject<PlayerCombatBridge | null>;
   touchBridgeRef?: React.MutableRefObject<PlayerTouchBridge | null>;
   vfxRef?: React.RefObject<CombatVFXHandle | null>;
@@ -98,6 +105,11 @@ export function Player({
   isInvisible,
   isGrimoireOpen,
   isDead,
+  flightSpeedMultiplier = 1,
+  weaponAttackBonus = 0,
+  initialSpawn = null,
+  characterName = null,
+  onLocalStateBroadcast,
   combatBridgeRef,
   touchBridgeRef,
   vfxRef,
@@ -129,6 +141,20 @@ export function Player({
   }, [scene, animations]);
 
   const controllerRef = useRef<CharacterController>(new CharacterController(0, 0));
+  const appliedSpawnKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!initialSpawn) return;
+    const key = `${initialSpawn.x},${initialSpawn.y},${initialSpawn.z},${initialSpawn.yaw}`;
+    if (appliedSpawnKeyRef.current === key) return;
+    appliedSpawnKeyRef.current = key;
+    const ctrl = controllerRef.current;
+    ctrl.position.set(initialSpawn.x, initialSpawn.y, initialSpawn.z);
+    ctrl.velocity.set(0, 0, 0);
+    ctrl.yaw = initialSpawn.yaw;
+    ctrl.grounded = true;
+    playerPosRef.current.copy(ctrl.position);
+  }, [initialSpawn, playerPosRef]);
   const animControllerRef = useRef<CharacterAnimationController>(
     new CharacterAnimationController()
   );
@@ -558,11 +584,26 @@ export function Player({
       camPitchRef.current,
       isFlying,
       hasWeapon,
-      isGrimoireOpen
+      isGrimoireOpen,
+      flightSpeedMultiplier
     );
 
     // Sync shared player position ref for Enemies & World
     playerPosRef.current.copy(ctrl.position);
+
+    if (onLocalStateBroadcast) {
+      onLocalStateBroadcast({
+        x: ctrl.position.x,
+        y: ctrl.position.y,
+        z: ctrl.position.z,
+        yaw: ctrl.yaw,
+        locomotionState: step.state,
+        horizSpeed: step.horizSpeed,
+        isFlying,
+        hasWeapon,
+        isInvisible,
+      });
+    }
 
     // Update character root transform
     if (groupRef.current) {
@@ -789,7 +830,7 @@ export function Player({
             playerPos: { x: ctrl.position.x, y: ctrl.position.y, z: ctrl.position.z },
             bladeBase: { x: bladeBaseRef.current.x, y: bladeBaseRef.current.y, z: bladeBaseRef.current.z },
             bladeTip: { x: bladeTipRef.current.x, y: bladeTipRef.current.y, z: bladeTipRef.current.z },
-            damage: calculateMeleeDamage(spec.damage),
+            damage: calculateMeleeDamage(spec.damage, weaponAttackBonus),
             reach: spec.reach + 1.4,
             isFinisher,
             comboStep: activeStep,
@@ -840,7 +881,7 @@ export function Player({
           if (inFrontArc && (bladeHit || dist < spec.reach * 0.72)) {
             hitEnemiesThisAttackRef.current.add(enemy.id);
             const invD = 1 / (dist || 1);
-            const damage = calculateMeleeDamage(spec.damage);
+            const damage = calculateMeleeDamage(spec.damage, weaponAttackBonus);
             applyEnemyDamage(
               enemy,
               damage,
@@ -957,6 +998,7 @@ export function Player({
 
   return (
     <group ref={groupRef} position={[0, getGroundHeight(0, 0), 0]}>
+      {characterName && <Nameplate name={characterName} accentColor="#38bdf8" />}
       <group ref={tiltGroupRef}>
         <group
           ref={modelRef}

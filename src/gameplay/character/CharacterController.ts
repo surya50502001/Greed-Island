@@ -319,7 +319,8 @@ export class CharacterController {
     camPitch: number,
     isFlying: boolean,
     hasWeapon: boolean,
-    isGrimoireOpen: boolean
+    isGrimoireOpen: boolean,
+    flightSpeedMultiplier = 1
   ): CharacterStepResult {
     const safeDt = Math.min(dt, 0.05);
     const input = this.readInputs(isGrimoireOpen);
@@ -406,7 +407,7 @@ export class CharacterController {
         this.moveDir.normalize();
       }
 
-      const flySpeed = input.sprint ? 26 : 13.5;
+      const flySpeed = (input.sprint ? 26 : 13.5) * flightSpeedMultiplier;
       const targetVel = this.moveDir.multiplyScalar(flySpeed);
       const accel = this.moveDir.lengthSq() > 0.01 ? 6.5 : 4.5;
       this.velocity.lerp(targetVel, 1 - Math.exp(-accel * safeDt));

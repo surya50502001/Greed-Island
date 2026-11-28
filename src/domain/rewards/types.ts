@@ -68,6 +68,17 @@ export const BOSS_REWARD_TABLES: Record<string, RewardTable> = {
         minTier: 1,
       },
       {
+        id: 'fenrir_flight_card',
+        category: 'card',
+        label: 'Flight Card',
+        cardId: 'flight',
+        minQuantity: 1,
+        maxQuantity: 1,
+        probability: 0.55,
+        guaranteed: false,
+        minTier: 1,
+      },
+      {
         id: 'fenrir_fang_card',
         category: 'exclusive_card',
         label: 'Fenrir Frost Fang (Boss Card)',

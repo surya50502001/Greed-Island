@@ -18,6 +18,35 @@ export function createEmptyLoadout(): ActiveCardLoadout {
   return { slots: [null, null, null, null] };
 }
 
+export function createStarterInventory(): CardInventory {
+  return addCardToInventory(createEmptyInventory(), 'weapon', 1);
+}
+
+export function createStarterLoadout(): ActiveCardLoadout {
+  return { slots: ['weapon', null, null, null] };
+}
+
+export function getWeaponAttackBonus(level: number): number {
+  return Math.max(0, level - 1) * 4;
+}
+
+export function getFlightSpeedMultiplier(level: number): number {
+  return 1 + Math.max(0, level - 1) * 0.08;
+}
+
+export function getInvisibilityDuration(level: number, baseDuration: number): number {
+  return baseDuration + Math.max(0, level - 1) * 1.5;
+}
+
+export function getEffectiveCardCooldown(
+  definition: CardDefinition<AnyCardId> | undefined,
+  level: number
+): number {
+  const base = definition?.cooldownSeconds ?? 0;
+  if (base <= 0) return 0;
+  return Math.max(4, base - Math.max(0, level - 1));
+}
+
 /**
  * Adds `count` copies of a card to inventory. First copy unlocks level 1;
  * additional copies accumulate as duplicates for upgrading.

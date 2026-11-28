@@ -1,5 +1,11 @@
 import React from 'react';
-import { INVISIBILITY_DURATION, PLAYER_MAX_HP } from '../types/game';
+import { CARD_DEFINITIONS, INVISIBILITY_DURATION, PLAYER_MAX_HP } from '../types/game';
+import {
+  ActiveCardLoadout,
+  AnyCardId,
+  CardCooldownMap,
+  CardInventory,
+} from '../domain/cards/types';
 import { FloatingDamageEvent } from './Player';
 
 export interface ActiveDamageNumber extends FloatingDamageEvent {
@@ -20,6 +26,10 @@ interface HUDProps {
   comboStep?: number;
   comboAttackName?: string;
   comboTimer?: number;
+  inventory?: CardInventory;
+  loadout?: ActiveCardLoadout;
+  cooldowns?: CardCooldownMap;
+  onActivateSlotCard?: (cardId: AnyCardId) => void;
   onRevive: () => void;
 }
 
@@ -37,6 +47,10 @@ export const HUD: React.FC<HUDProps> = ({
   comboStep = 0,
   comboAttackName = '',
   comboTimer = 0,
+  inventory,
+  loadout,
+  cooldowns = {},
+  onActivateSlotCard,
   onRevive,
 }) => {
   const isInvisible = invisTimer > 0;
@@ -381,6 +395,77 @@ export const HUD: React.FC<HUDProps> = ({
               }}
             >
               WASD Fly &nbsp;•&nbsp; Space Ascend &nbsp;•&nbsp; C Descend &nbsp;•&nbsp; Shift Boost
+            </div>
+          )}
+
+          {!isDead && loadout && (
+            <div
+              style={{
+                display: 'flex',
+                gap: '8px',
+                pointerEvents: 'auto',
+              }}
+            >
+              {loadout.slots.map((cardId, idx) => {
+                const def = cardId
+                  ? CARD_DEFINITIONS.find((c) => c.id === cardId)
+                  : undefined;
+                const entry = cardId && inventory ? inventory.cards[cardId] : undefined;
+                const cd = cardId ? cooldowns[cardId] ?? 0 : 0;
+                const isCardActive =
+                  (cardId === 'flight' && isFlying) ||
+                  (cardId === 'weapon' && hasWeapon) ||
+                  (cardId === 'invisibility' && isInvisible);
+                const label = def
+                  ? def.name
+                  : cardId
+                    ? cardId.replace(/_/g, ' ')
+                    : 'Empty';
+
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    disabled={!cardId || cd > 0}
+                    onClick={() => cardId && cd <= 0 && onActivateSlotCard?.(cardId)}
+                    style={{
+                      minWidth: '82px',
+                      padding: '6px 10px',
+                      borderRadius: '10px',
+                      border: `1.5px solid ${
+                        isCardActive
+                          ? '#4ade80'
+                          : cardId
+                            ? 'rgba(148, 163, 184, 0.45)'
+                            : 'rgba(148, 163, 184, 0.2)'
+                      }`,
+                      background: isCardActive
+                        ? 'rgba(20, 83, 45, 0.78)'
+                        : 'rgba(15, 23, 42, 0.78)',
+                      color: cardId ? '#f8fafc' : '#64748b',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      cursor: cardId && cd <= 0 ? 'pointer' : 'default',
+                      backdropFilter: 'blur(8px)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '2px',
+                      opacity: cd > 0 ? 0.65 : 1,
+                    }}
+                  >
+                    <span style={{ fontSize: '9px', color: '#94a3b8' }}>
+                      [{idx + 1}] {entry ? `Lv.${entry.level}` : ''}
+                    </span>
+                    <span style={{ textTransform: 'capitalize' }}>{label}</span>
+                    {cd > 0 && (
+                      <span style={{ fontSize: '10px', color: '#fde047' }}>
+                        {Math.ceil(cd)}s
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
 

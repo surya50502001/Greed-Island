@@ -2,7 +2,28 @@ import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Environment, Lightformer, Sky } from '@react-three/drei';
 import * as THREE from 'three';
-import { CardId, INVISIBILITY_DURATION, PLAYER_MAX_HP } from './types/game';
+import { CARD_DEFINITIONS, INVISIBILITY_DURATION, PLAYER_MAX_HP } from './types/game';
+import {
+  ActiveCardLoadout,
+  ActiveCardSlotIndex,
+  AnyCardId,
+  CardCooldownMap,
+  CardInventory,
+} from './domain/cards/types';
+import {
+  addCardToInventory,
+  canActivateCard,
+  createStarterInventory,
+  createStarterLoadout,
+  equipCardToSlot,
+  getEffectiveCardCooldown,
+  getFlightSpeedMultiplier,
+  getInvisibilityDuration,
+  getWeaponAttackBonus,
+  tickCardCooldowns,
+  unequipSlot,
+  upgradeCard,
+} from './domain/cards/rules';
 import { getGroundHeight, getTerrainHeight } from './world/terrain';
 import { World } from './components/World';
 import { createInitialEnemies, Enemies, EnemyEntity } from './components/Enemies';
@@ -51,6 +72,13 @@ import { IslandMapModal } from './components/raids/IslandMapModal';
 import { RaidGatheringPanel } from './components/raids/RaidGatheringPanel';
 import { RaidEncounterHUD } from './components/raids/RaidEncounterHUD';
 import { RaidRewardModal } from './components/raids/RaidRewardModal';
+import {
+  GreedSignalRClient,
+  MovementInputPayload,
+  RemotePlayerSnapshot,
+} from './network/SignalRClient';
+import { MultiplayerLobby } from './components/multiplayer/MultiplayerLobby';
+import { RemotePlayer } from './components/multiplayer/RemotePlayer';
 
 const LOCAL_PLAYER_ID = 'local-player';
 
@@ -63,6 +91,34 @@ export function App() {
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [isTouchVisible, setIsTouchVisible] = useState(false);
   const [, setPointerLocked] = useState(false);
+
+  // Multiplayer Lobby, Identity & SignalR Sync State
+  const signalRRef = useRef<GreedSignalRClient | null>(null);
+  const remoteSnapshotsRef = useRef<Record<string, RemotePlayerSnapshot>>({});
+  const [isLobbyOpen, setIsLobbyOpen] = useState(true);
+  const [isMultiplayerActive, setIsMultiplayerActive] = useState(false);
+  const [mpBusy, setMpBusy] = useState(false);
+  const [mpStatus, setMpStatus] = useState<string | null>(null);
+  const [mpRoomCode, setMpRoomCode] = useState<string | null>(null);
+  const [mpLocalPlayerId, setMpLocalPlayerId] = useState<string | null>(null);
+  const [mpCharacterName, setMpCharacterName] = useState<string | null>(null);
+  const [mpRoomPlayers, setMpRoomPlayers] = useState<RemotePlayerSnapshot[]>([]);
+  const [mpLocalSpawn, setMpLocalSpawn] = useState<{
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+  } | null>(null);
+
+  // Local Card Inventory, 4-Slot Loadout, Cooldowns, & Progression Materials
+  const [cardInventory, setCardInventory] = useState<CardInventory>(() =>
+    createStarterInventory()
+  );
+  const [cardLoadout, setCardLoadout] = useState<ActiveCardLoadout>(() =>
+    createStarterLoadout()
+  );
+  const [cardCooldowns, setCardCooldowns] = useState<CardCooldownMap>({});
+  const [, setCardMaterials] = useState<Record<string, number>>({});
 
   // Raid Event & Boss Prototype State (throttled UI sync from domain refs)
   const raidsRef = useRef<RaidEvent[]>([]);
@@ -125,15 +181,208 @@ export function App() {
 
   const isDead = playerHp <= 0;
 
-  const handleActivateCard = useCallback((id: CardId) => {
-    if (id === 'flight') {
-      setIsFlying((prev) => !prev);
-    } else if (id === 'weapon') {
-      setHasWeapon((prev) => !prev);
-    } else if (id === 'invisibility') {
-      setInvisTimer(INVISIBILITY_DURATION);
-    }
+  const ensureSignalRConnected = useCallback(
+    async (myPlayerIdRef: React.MutableRefObject<string | null>) => {
+      if (!signalRRef.current) {
+        signalRRef.current = new GreedSignalRClient();
+      }
+      await signalRRef.current.connect({
+        onRoomUpdated: (payload) => {
+          setMpRoomPlayers(payload.players);
+        },
+        onWorldReady: (payload) => {
+          const selfId = myPlayerIdRef.current;
+          setMpRoomPlayers(payload.players);
+          for (const p of payload.players) {
+            if (p.playerId === selfId) {
+              setMpLocalSpawn({ x: p.x, y: p.y, z: p.z, yaw: p.yaw });
+            } else {
+              remoteSnapshotsRef.current[p.playerId] = p;
+            }
+          }
+          setIsMultiplayerActive(true);
+          setIsLobbyOpen(false);
+        },
+        onPlayerMoved: (snapshot) => {
+          remoteSnapshotsRef.current[snapshot.playerId] = snapshot;
+        },
+        onPlayerLeft: (payload) => {
+          delete remoteSnapshotsRef.current[payload.playerId];
+          setMpRoomPlayers(payload.players);
+        },
+        onDisconnected: () => {
+          setMpStatus('Disconnected from multiplayer server.');
+        },
+      });
+    },
+    []
+  );
+
+  const mpSelfIdRef = useRef<string | null>(null);
+
+  const handleCreateRoom = useCallback(
+    async (characterName: string) => {
+      setMpBusy(true);
+      setMpStatus(null);
+      try {
+        await ensureSignalRConnected(mpSelfIdRef);
+        const res = await signalRRef.current!.createRoom(characterName);
+        if (!res.success) {
+          setMpStatus(res.error ?? 'Failed to create room.');
+          return;
+        }
+        mpSelfIdRef.current = res.playerId ?? null;
+        setMpLocalPlayerId(res.playerId ?? null);
+        setMpCharacterName(res.characterName ?? characterName);
+        setMpRoomCode(res.roomCode ?? null);
+        setMpRoomPlayers(res.players);
+      } catch {
+        setMpStatus('Could not reach multiplayer server. Check backend URL.');
+      } finally {
+        setMpBusy(false);
+      }
+    },
+    [ensureSignalRConnected]
+  );
+
+  const handleJoinRoom = useCallback(
+    async (characterName: string, roomCode: string) => {
+      setMpBusy(true);
+      setMpStatus(null);
+      try {
+        await ensureSignalRConnected(mpSelfIdRef);
+        const res = await signalRRef.current!.joinRoom(characterName, roomCode);
+        if (!res.success) {
+          setMpStatus(res.error ?? 'Failed to join room.');
+          return;
+        }
+        mpSelfIdRef.current = res.playerId ?? null;
+        setMpLocalPlayerId(res.playerId ?? null);
+        setMpCharacterName(res.characterName ?? characterName);
+        setMpRoomCode(res.roomCode ?? null);
+        setMpRoomPlayers(res.players);
+        if (res.isReady) {
+          for (const p of res.players) {
+            if (p.playerId === res.playerId) {
+              setMpLocalSpawn({ x: p.x, y: p.y, z: p.z, yaw: p.yaw });
+            } else {
+              remoteSnapshotsRef.current[p.playerId] = p;
+            }
+          }
+          setIsMultiplayerActive(true);
+          setIsLobbyOpen(false);
+        }
+      } catch {
+        setMpStatus('Could not reach multiplayer server. Check backend URL.');
+      } finally {
+        setMpBusy(false);
+      }
+    },
+    [ensureSignalRConnected]
+  );
+
+  const handlePlaySolo = useCallback(() => {
+    void signalRRef.current?.disconnect();
+    setIsMultiplayerActive(false);
+    setMpRoomCode(null);
+    setMpRoomPlayers([]);
+    setIsLobbyOpen(false);
   }, []);
+
+  const handleLocalStateBroadcast = useCallback(
+    (payload: MovementInputPayload) => {
+      if (!isMultiplayerActive) return;
+      signalRRef.current?.sendMovement(payload);
+    },
+    [isMultiplayerActive]
+  );
+
+  useEffect(() => {
+    return () => {
+      void signalRRef.current?.disconnect();
+    };
+  }, []);
+
+  const handleActivateCard = useCallback(
+    (id: AnyCardId): boolean => {
+      if (isDead) return false;
+      const check = canActivateCard(id, cardLoadout, cardCooldowns);
+      if (!check.allowed) return false;
+
+      const entry = cardInventory.cards[id];
+      const level = entry?.level ?? 1;
+      const def = CARD_DEFINITIONS.find((c) => c.id === id);
+      const cd = getEffectiveCardCooldown(def, level);
+
+      if (id === 'flight') {
+        setIsFlying((prev) => !prev);
+      } else if (id === 'weapon') {
+        setHasWeapon((prev) => !prev);
+      } else if (id === 'invisibility') {
+        setInvisTimer(getInvisibilityDuration(level, INVISIBILITY_DURATION));
+      } else {
+        return false;
+      }
+
+      if (cd > 0) {
+        setCardCooldowns((prev) => ({ ...prev, [id]: cd }));
+      }
+      return true;
+    },
+    [isDead, cardLoadout, cardCooldowns, cardInventory]
+  );
+
+  const handleEquipCard = useCallback(
+    (cardId: AnyCardId, slotIndex: ActiveCardSlotIndex) => {
+      setCardLoadout((prev) => equipCardToSlot(prev, cardInventory, cardId, slotIndex).loadout);
+    },
+    [cardInventory]
+  );
+
+  const handleUnequipSlot = useCallback(
+    (slotIndex: ActiveCardSlotIndex) => {
+      const removed = cardLoadout.slots[slotIndex];
+      setCardLoadout((prev) => unequipSlot(prev, slotIndex));
+      if (removed === 'flight') setIsFlying(false);
+      if (removed === 'weapon') setHasWeapon(false);
+    },
+    [cardLoadout]
+  );
+
+  const handleUpgradeCard = useCallback((cardId: AnyCardId) => {
+    const def = CARD_DEFINITIONS.find((c) => c.id === cardId);
+    setCardInventory((prev) => upgradeCard(prev, cardId, def).inventory);
+  }, []);
+
+  const applyRewardGrantToInventory = useCallback((grant: RaidRewardGrant) => {
+    setCardInventory((prev) => {
+      let next = prev;
+      for (const item of grant.items) {
+        if (item.cardId) {
+          next = addCardToInventory(next, item.cardId, item.quantity);
+        }
+      }
+      return next;
+    });
+    setCardMaterials((prev) => {
+      const next = { ...prev };
+      for (const item of grant.items) {
+        if (!item.cardId) {
+          next[item.id] = (next[item.id] ?? 0) + item.quantity;
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  const hasActiveCooldowns = Object.keys(cardCooldowns).length > 0;
+  useEffect(() => {
+    if (!hasActiveCooldowns) return;
+    const interval = window.setInterval(() => {
+      setCardCooldowns((prev) => tickCardCooldowns(prev, 0.2));
+    }, 200);
+    return () => window.clearInterval(interval);
+  }, [hasActiveCooldowns]);
 
   const handlePlayerHit = useCallback(
     (damage: number, sourceId: string) => {
@@ -224,6 +473,7 @@ export function App() {
         ) {
           const res = claimRaidRewards(r, LOCAL_PLAYER_ID);
           if (res.success && res.grant) {
+            applyRewardGrantToInventory(res.grant);
             setClaimedRewardGrant(res.grant);
           }
         }
@@ -247,7 +497,7 @@ export function App() {
       setRaidUiTick(now);
     }, 250);
     return () => window.clearInterval(timer);
-  }, [spawnPrototypeRaid, claimedRewardGrant]);
+  }, [spawnPrototypeRaid, claimedRewardGrant, applyRewardGrantToInventory]);
 
   const handleJoinRaid = useCallback((raidId: string) => {
     const raid = raidsRef.current.find((r) => r.raidId === raidId);
@@ -318,12 +568,13 @@ export function App() {
         stepRaidLifecycle(raid, Date.now() / 1000);
         const rewardRes = claimRaidRewards(raid, LOCAL_PLAYER_ID);
         if (rewardRes.success && rewardRes.grant) {
+          applyRewardGrantToInventory(rewardRes.grant);
           setClaimedRewardGrant(rewardRes.grant);
         }
       }
       return true;
     },
-    [handleDamageNumber]
+    [handleDamageNumber, applyRewardGrantToInventory]
   );
 
   // Grimoire & Island Map keybindings + Revival
@@ -345,11 +596,26 @@ export function App() {
       } else if (e.code === 'Escape') {
         setIsGrimoireOpen(false);
         setIsMapOpen(false);
+      } else if (!isGrimoireOpen && !isMapOpen) {
+        const slotIdx: ActiveCardSlotIndex | null =
+          e.code === 'Digit1'
+            ? 0
+            : e.code === 'Digit2'
+              ? 1
+              : e.code === 'Digit3'
+                ? 2
+                : e.code === 'Digit4'
+                  ? 3
+                  : null;
+        if (slotIdx !== null) {
+          const cardId = cardLoadout.slots[slotIdx];
+          if (cardId) handleActivateCard(cardId);
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isDead, handleRevive]);
+  }, [isDead, handleRevive, isGrimoireOpen, isMapOpen, cardLoadout, handleActivateCard]);
 
   const activeSceneRaid =
     raidsRef.current.find((r) => r.status === 'InProgress') ??
@@ -478,8 +744,17 @@ export function App() {
             isFlying={isFlying}
             hasWeapon={hasWeapon}
             isInvisible={isInvisible}
-            isGrimoireOpen={isGrimoireOpen || isMapOpen}
+            isGrimoireOpen={isGrimoireOpen || isMapOpen || isLobbyOpen}
             isDead={isDead}
+            flightSpeedMultiplier={getFlightSpeedMultiplier(
+              cardInventory.cards['flight']?.level ?? 1
+            )}
+            weaponAttackBonus={getWeaponAttackBonus(
+              cardInventory.cards['weapon']?.level ?? 1
+            )}
+            initialSpawn={mpLocalSpawn}
+            characterName={isMultiplayerActive ? mpCharacterName : null}
+            onLocalStateBroadcast={isMultiplayerActive ? handleLocalStateBroadcast : undefined}
             combatBridgeRef={combatBridgeRef}
             touchBridgeRef={touchBridgeRef}
             vfxRef={vfxRef}
@@ -488,6 +763,16 @@ export function App() {
             onComboHit={handleComboHit}
             onPointerLockChange={setPointerLocked}
           />
+          {isMultiplayerActive &&
+            mpRoomPlayers
+              .filter((p) => p.playerId !== mpLocalPlayerId)
+              .map((rp) => (
+                <RemotePlayer
+                  key={rp.playerId}
+                  initialSnapshot={rp}
+                  snapshotsRef={remoteSnapshotsRef}
+                />
+              ))}
         </Suspense>
         <Grimoire
           isOpen={isGrimoireOpen && !isDead}
@@ -500,7 +785,13 @@ export function App() {
           isFlying={isFlying}
           hasWeapon={hasWeapon}
           isInvisible={isInvisible}
+          inventory={cardInventory}
+          loadout={cardLoadout}
+          cooldowns={cardCooldowns}
           onActivateCard={handleActivateCard}
+          onEquipCard={handleEquipCard}
+          onUnequipSlot={handleUnequipSlot}
+          onUpgradeCard={handleUpgradeCard}
           onClose={() => setIsGrimoireOpen(false)}
         />
       )}
@@ -518,6 +809,10 @@ export function App() {
         comboStep={comboState.step}
         comboAttackName={comboState.attackName}
         comboTimer={comboState.timer}
+        inventory={cardInventory}
+        loadout={cardLoadout}
+        cooldowns={cardCooldowns}
+        onActivateSlotCard={handleActivateCard}
         onRevive={handleRevive}
       />
       <RaidEncounterHUD
@@ -575,6 +870,17 @@ export function App() {
       <RaidRewardModal
         grant={claimedRewardGrant}
         onClose={() => setClaimedRewardGrant(null)}
+      />
+      <MultiplayerLobby
+        isOpen={isLobbyOpen}
+        roomCode={mpRoomCode}
+        players={mpRoomPlayers}
+        localPlayerId={mpLocalPlayerId}
+        statusMessage={mpStatus}
+        isBusy={mpBusy}
+        onCreateRoom={handleCreateRoom}
+        onJoinRoom={handleJoinRoom}
+        onPlaySolo={handlePlaySolo}
       />
       <MobileControls
         touchBridgeRef={touchBridgeRef}

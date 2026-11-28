@@ -11,7 +11,17 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { CARD_DEFINITIONS, CardDefinition, CardId } from '../types/game';
+import { CARD_DEFINITIONS, CardDefinition } from '../types/game';
+import {
+  ActiveCardLoadout,
+  ActiveCardSlotIndex,
+  AnyCardId,
+  CardCooldownMap,
+  CardInventory,
+  DEFAULT_MAX_CARD_LEVEL,
+  OwnedCardEntry,
+} from '../domain/cards/types';
+import { canActivateCard, getCardUpgradeCost } from '../domain/cards/rules';
 import {
   indexToShortcut,
   isExactMatch,
@@ -212,17 +222,23 @@ function rarityLabel(rarity: string): string {
 // ─── Single Card in Grid ──────────────────────────────────────────────────────
 
 interface GrimoireCardItemProps {
-  card: CardDefinition;
+  card: CardDefinition<AnyCardId>;
+  entry: OwnedCardEntry;
+  equippedSlot: number; // -1 if not equipped
+  cooldownSec: number;
   cardIndex: number; // 0-based
   totalCards: number;
   isActive: boolean;
   isSelected: boolean;
   isShortcutMatch: boolean;
-  onSelect: (id: CardId) => void;
+  onSelect: (id: AnyCardId) => void;
 }
 
 const GrimoireCardItem = React.memo(function GrimoireCardItem({
   card,
+  entry,
+  equippedSlot,
+  cooldownSec,
   cardIndex,
   isActive,
   isSelected,
@@ -253,7 +269,7 @@ const GrimoireCardItem = React.memo(function GrimoireCardItem({
         <div className="grimoire-card-frame">
           {/* Artwork */}
           <div className="grimoire-card-art">
-            <CardArtCanvas card={card} isActive={isActive} size={160} />
+            <CardArtCanvas card={card as CardDefinition} isActive={isActive} size={160} />
           </div>
 
           {/* Rarity divider */}
@@ -262,8 +278,13 @@ const GrimoireCardItem = React.memo(function GrimoireCardItem({
           {/* Info */}
           <div className="grimoire-card-info">
             <div className="grimoire-card-name">{card.name}</div>
-            <div className="grimoire-card-category">{card.category}</div>
-            <div className="grimoire-card-rarity-badge">{rarityLabel(card.rarity)}</div>
+            <div className="grimoire-card-category">
+              Lv.{entry.level} · {entry.duplicates} dup
+              {equippedSlot >= 0 ? ` · S${equippedSlot + 1}` : ''}
+            </div>
+            <div className="grimoire-card-rarity-badge">
+              {cooldownSec > 0 ? `⏳ ${Math.ceil(cooldownSec)}s` : rarityLabel(card.rarity)}
+            </div>
           </div>
 
           {/* Shortcut badge */}
@@ -286,14 +307,37 @@ function EmptySlot() {
 // ─── Inspection Panel ─────────────────────────────────────────────────────────
 
 interface InspectionPanelProps {
-  card: CardDefinition;
+  card: CardDefinition<AnyCardId>;
+  entry: OwnedCardEntry;
+  loadout: ActiveCardLoadout;
+  cooldownSec: number;
   cardIndex: number;
   isActive: boolean;
-  onActivate: (id: CardId) => void;
+  onActivate: (id: AnyCardId) => void;
+  onEquip: (id: AnyCardId, slot: ActiveCardSlotIndex) => void;
+  onUnequipSlot: (slot: ActiveCardSlotIndex) => void;
+  onUpgrade: (id: AnyCardId) => void;
 }
 
-function InspectionPanel({ card, cardIndex, isActive, onActivate }: InspectionPanelProps) {
+function InspectionPanel({
+  card,
+  entry,
+  loadout,
+  cooldownSec,
+  cardIndex,
+  isActive,
+  onActivate,
+  onEquip,
+  onUnequipSlot,
+  onUpgrade,
+}: InspectionPanelProps) {
   const shortcut = indexToShortcut(cardIndex + 1);
+  const equippedSlot = loadout.slots.indexOf(card.id);
+  const maxLevel = card.maxLevel ?? DEFAULT_MAX_CARD_LEVEL;
+  const isMaxLevel = entry.level >= maxLevel;
+  const upgradeCost = getCardUpgradeCost(entry.level);
+  const canUpgrade = !isMaxLevel && entry.duplicates >= upgradeCost;
+  const activationCheck = canActivateCard(card.id, loadout, { [card.id]: cooldownSec });
 
   return (
     <div
@@ -305,7 +349,7 @@ function InspectionPanel({ card, cardIndex, isActive, onActivate }: InspectionPa
         className={`grimoire-inspection-card-preview ${rarityClass(card.rarity)}`}
         style={{ '--card-accent': getComputedRarityAccent(card.rarity) } as React.CSSProperties}
       >
-        <CardArtCanvas card={card} isActive={isActive} size={320} />
+        <CardArtCanvas card={card as CardDefinition} isActive={isActive} size={320} />
       </div>
 
       {/* Details */}
@@ -321,6 +365,18 @@ function InspectionPanel({ card, cardIndex, isActive, onActivate }: InspectionPa
           <span className="grimoire-inspection-value">{rarityLabel(card.rarity)}</span>
         </div>
         <div className="grimoire-inspection-row">
+          <span className="grimoire-inspection-label">Level</span>
+          <span className="grimoire-inspection-value">
+            Lv.{entry.level} / {maxLevel}
+          </span>
+        </div>
+        <div className="grimoire-inspection-row">
+          <span className="grimoire-inspection-label">Duplicates</span>
+          <span className="grimoire-inspection-value">
+            {entry.duplicates} {isMaxLevel ? '(MAX)' : `(Next: ${upgradeCost})`}
+          </span>
+        </div>
+        <div className="grimoire-inspection-row">
           <span className="grimoire-inspection-label">Quick-Cast</span>
           <span className="grimoire-inspection-value"
             style={{ fontFamily: 'Cinzel, monospace', letterSpacing: '0.1em' }}>
@@ -331,20 +387,85 @@ function InspectionPanel({ card, cardIndex, isActive, onActivate }: InspectionPa
           <span className="grimoire-inspection-label">Status</span>
           <span
             className="grimoire-inspection-value"
-            style={{ color: isActive ? '#4ade80' : '#94a3b8' }}
+            style={{ color: isActive ? '#4ade80' : equippedSlot >= 0 ? '#7dd3fc' : '#94a3b8' }}
           >
-            {isActive ? '● Active' : '○ Inactive'}
+            {isActive ? '● Active' : equippedSlot >= 0 ? `Slot ${equippedSlot + 1}` : '○ Unequipped'}
           </span>
         </div>
 
         <div className="grimoire-inspection-desc">{card.description}</div>
 
+        {/* 4 Active Slot Equip Controls */}
+        <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+          {([0, 1, 2, 3] as ActiveCardSlotIndex[]).map((slotIdx) => {
+            const isThisSlot = equippedSlot === slotIdx;
+            return (
+              <button
+                key={slotIdx}
+                type="button"
+                onClick={() => (isThisSlot ? onUnequipSlot(slotIdx) : onEquip(card.id, slotIdx))}
+                style={{
+                  flex: 1,
+                  padding: '5px 4px',
+                  borderRadius: '6px',
+                  border: `1px solid ${isThisSlot ? '#38bdf8' : 'rgba(212,176,96,0.35)'}`,
+                  background: isThisSlot ? 'rgba(14, 116, 144, 0.7)' : 'rgba(15, 23, 42, 0.75)',
+                  color: '#f8fafc',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {isThisSlot ? `Unequip ${slotIdx + 1}` : `Slot ${slotIdx + 1}`}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Upgrade Button */}
         <button
           type="button"
-          className={`grimoire-cast-btn ${isActive ? 'active-state' : ''} ${rarityClass(card.rarity)}`}
-          onClick={() => onActivate(card.id)}
+          disabled={!canUpgrade}
+          onClick={() => onUpgrade(card.id)}
+          style={{
+            marginTop: '6px',
+            width: '100%',
+            padding: '7px 10px',
+            borderRadius: '8px',
+            border: `1px solid ${canUpgrade ? '#fbbf24' : 'rgba(148,163,184,0.25)'}`,
+            background: canUpgrade
+              ? 'linear-gradient(135deg, #b45309, #d97706)'
+              : 'rgba(30, 41, 59, 0.6)',
+            color: canUpgrade ? '#ffffff' : '#94a3b8',
+            fontSize: '12px',
+            fontWeight: 700,
+            cursor: canUpgrade ? 'pointer' : 'not-allowed',
+          }}
         >
-          {isActive ? '✦ DEACTIVATE' : '✦ CAST SPELL'}
+          {isMaxLevel
+            ? '★ MAX LEVEL REACHED'
+            : canUpgrade
+              ? `▲ UPGRADE TO LV.${entry.level + 1} (${upgradeCost} DUP)`
+              : `UPGRADE NEEDS ${upgradeCost} DUP`}
+        </button>
+
+        <button
+          type="button"
+          disabled={!activationCheck.allowed}
+          className={`grimoire-cast-btn ${isActive ? 'active-state' : ''} ${rarityClass(card.rarity)}`}
+          style={{
+            opacity: activationCheck.allowed ? 1 : 0.5,
+            cursor: activationCheck.allowed ? 'pointer' : 'not-allowed',
+          }}
+          onClick={() => activationCheck.allowed && onActivate(card.id)}
+        >
+          {activationCheck.reason === 'not_equipped'
+            ? 'EQUIP TO SLOT FIRST'
+            : activationCheck.reason === 'on_cooldown'
+              ? `COOLDOWN (${Math.ceil(cooldownSec)}s)`
+              : isActive
+                ? '✦ DEACTIVATE'
+                : '✦ CAST SPELL'}
         </button>
       </div>
     </div>
@@ -413,26 +534,62 @@ interface GrimoireOverlayProps {
   isFlying: boolean;
   hasWeapon: boolean;
   isInvisible: boolean;
-  onActivateCard: (id: CardId) => void;
+  inventory: CardInventory;
+  loadout: ActiveCardLoadout;
+  cooldowns: CardCooldownMap;
+  onActivateCard: (id: AnyCardId) => boolean;
+  onEquipCard: (id: AnyCardId, slot: ActiveCardSlotIndex) => void;
+  onUnequipSlot: (slot: ActiveCardSlotIndex) => void;
+  onUpgradeCard: (id: AnyCardId) => void;
   onClose: () => void;
 }
 
 /** Delay (ms) before a single-char shortcut that is ALSO a prefix resolves */
 const AMBIGUOUS_RESOLVE_MS = 380;
 
+function resolveCardDefinition(cardId: AnyCardId): CardDefinition<AnyCardId> {
+  const found = CARD_DEFINITIONS.find((c) => c.id === cardId);
+  if (found) return found;
+  return {
+    id: cardId,
+    name: cardId
+      .split('_')
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' '),
+    category: 'BOSS RELIC',
+    rarity: 'Mythic',
+    description: 'Rare boss-exclusive card obtained from a World Raid.',
+    accentColor: '#c084fc',
+    glowColor: '#fde047',
+    maxLevel: DEFAULT_MAX_CARD_LEVEL,
+    cooldownSeconds: 0,
+    effectType: 'passive',
+  };
+}
+
 export function GrimoireOverlay({
   isOpen,
   isFlying,
   hasWeapon,
   isInvisible,
+  inventory,
+  loadout,
+  cooldowns,
   onActivateCard,
+  onEquipCard,
+  onUnequipSlot,
+  onUpgradeCard,
   onClose,
 }: GrimoireOverlayProps) {
-  const cards = CARD_DEFINITIONS;
+  const ownedEntries = useMemo(() => Object.values(inventory.cards), [inventory]);
+  const cards = useMemo(
+    () => ownedEntries.map((e) => resolveCardDefinition(e.cardId)),
+    [ownedEntries]
+  );
   const totalCards = cards.length;
 
   const [currentSpread, setCurrentSpread] = useState(0);
-  const [selectedCardId, setSelectedCardId] = useState<CardId | null>(null);
+  const [selectedCardId, setSelectedCardId] = useState<AnyCardId | null>(null);
   const [pageTurning, setPageTurning] = useState(false);
   const [confirmCard, setConfirmCard] = useState<string | null>(null);
 
@@ -446,7 +603,7 @@ export function GrimoireOverlay({
   const spread = getSpreadLayout(currentSpread, totalCards);
 
   // Active map
-  const activeMap: Record<CardId, boolean> = {
+  const activeMap: Record<string, boolean> = {
     flight: isFlying,
     weapon: hasWeapon,
     invisibility: isInvisible,
@@ -635,12 +792,13 @@ export function GrimoireOverlay({
   }, [currentSpread, totalSpreads]);
 
   // Card click handler
-  const handleCardSelect = useCallback((id: CardId) => {
+  const handleCardSelect = useCallback((id: AnyCardId) => {
     setSelectedCardId((prev) => (prev === id ? null : id));
   }, []);
 
   // Activate from inspection panel
-  const handleActivate = useCallback((id: CardId) => {
+  const handleActivate = useCallback((id: AnyCardId) => {
+    if (!canActivateCard(id, loadout, cooldowns).allowed) return;
     const idx = cards.findIndex((c) => c.id === id);
     setConfirmCard(cards[idx]?.name ?? '');
     setSelectedCardId(id);
@@ -648,11 +806,12 @@ export function GrimoireOverlay({
       onActivateCard(id);
       onClose();
     }, 500);
-  }, [cards, onActivateCard, onClose]);
+  }, [cards, loadout, cooldowns, onActivateCard, onClose]);
 
   if (!isOpen) return null;
 
   const selectedCard = selectedCardId ? cards.find((c) => c.id === selectedCardId) ?? null : null;
+  const selectedEntry = selectedCard ? inventory.cards[selectedCard.id] ?? null : null;
   const selectedCardIndex = selectedCard ? cards.indexOf(selectedCard) : -1;
 
   // Build page columns
@@ -660,12 +819,16 @@ export function GrimoireOverlay({
     return indices.map((ci, slotIdx) => {
       if (ci === -1) return <EmptySlot key={`empty-${slotIdx}`} />;
       const card = cards[ci];
-      if (!card) return <EmptySlot key={`missing-${slotIdx}`} />;
+      const entry = card ? inventory.cards[card.id] : undefined;
+      if (!card || !entry) return <EmptySlot key={`missing-${slotIdx}`} />;
       const isMatch = matchedCardIndex === ci;
       return (
         <GrimoireCardItem
           key={card.id}
           card={card}
+          entry={entry}
+          equippedSlot={loadout.slots.indexOf(card.id)}
+          cooldownSec={cooldowns[card.id] ?? 0}
           cardIndex={ci}
           totalCards={totalCards}
           isActive={activeMap[card.id] ?? false}
@@ -718,9 +881,23 @@ export function GrimoireOverlay({
               <div className="grimoire-ornament">— ✦ —</div>
               <div className="grimoire-page-divider" />
 
-              <div className="grimoire-card-grid">
-                {renderCardSlots(spread.leftCards)}
-              </div>
+              {totalCards === 0 ? (
+                <div
+                  style={{
+                    padding: '24px 12px',
+                    textAlign: 'center',
+                    color: '#94a3b8',
+                    fontSize: '13px',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Your Grimoire inventory is empty. Defeat Raid Bosses on the island to collect cards.
+                </div>
+              ) : (
+                <div className="grimoire-card-grid">
+                  {renderCardSlots(spread.leftCards)}
+                </div>
+              )}
 
               <div className="grimoire-page-divider" style={{ marginTop: 'auto' }} />
               <div
@@ -763,13 +940,19 @@ export function GrimoireOverlay({
         </div>
 
         {/* ── INSPECTION PANEL (right side) ── */}
-        {selectedCard && (
+        {selectedCard && selectedEntry && (
           <InspectionPanel
             key={selectedCard.id}
             card={selectedCard}
+            entry={selectedEntry}
+            loadout={loadout}
+            cooldownSec={cooldowns[selectedCard.id] ?? 0}
             cardIndex={selectedCardIndex}
             isActive={activeMap[selectedCard.id] ?? false}
             onActivate={handleActivate}
+            onEquip={onEquipCard}
+            onUnequipSlot={onUnequipSlot}
+            onUpgrade={onUpgradeCard}
           />
         )}
 
