@@ -1,4 +1,8 @@
 import React from 'react';
+import {
+  computeCardinalDirection,
+  computeDistanceMeters,
+} from '../../domain/world/mapProjection';
 import { RaidEvent } from '../../domain/raids/types';
 import { Vec3 } from '../../domain/math/vec3';
 
@@ -19,6 +23,17 @@ function formatCountdown(sec: number): string {
   const m = Math.floor(s / 60);
   const rem = s % 60;
   return `${m}:${rem.toString().padStart(2, '0')}`;
+}
+
+function statusBadge(status: RaidEvent['status']): { label: string; border: string; text: string } {
+  switch (status) {
+    case 'InProgress':
+      return { label: 'ACTIVE', border: 'rgba(220, 38, 38, 0.65)', text: '#fecaca' };
+    case 'Gathering':
+      return { label: 'GATHERING', border: 'rgba(217, 119, 6, 0.65)', text: '#fde68a' };
+    default:
+      return { label: 'UPCOMING', border: 'rgba(148, 163, 184, 0.4)', text: '#e2e8f0' };
+  }
 }
 
 export const RaidNotifications: React.FC<RaidNotificationsProps> = ({
@@ -44,103 +59,102 @@ export const RaidNotifications: React.FC<RaidNotificationsProps> = ({
 
   return (
     <>
-      {/* Top-right compact Raid Pill (reopen dismissed notifications or open map) */}
       {activeRaids.length > 0 && visibleNotifs.length === 0 && (
         <button
           type="button"
           onClick={onReopenAll}
           style={{
             position: 'fixed',
-            top: '58px',
-            right: '18px',
+            top: 'calc(54px + env(safe-area-inset-top, 0px))',
+            right: 'calc(14px + env(safe-area-inset-right, 0px))',
             zIndex: 22,
-            padding: '6px 12px',
-            borderRadius: '999px',
-            border: '1px solid rgba(192, 132, 252, 0.7)',
-            background: 'rgba(30, 27, 75, 0.85)',
-            color: '#f3e8ff',
-            fontSize: '12px',
+            padding: '5px 11px',
+            borderRadius: '8px',
+            border: '1px solid rgba(212, 175, 55, 0.45)',
+            background: 'rgba(11, 14, 21, 0.88)',
+            color: '#f3e8c8',
+            fontSize: '11px',
             fontWeight: 700,
             cursor: 'pointer',
             backdropFilter: 'blur(8px)',
             pointerEvents: 'auto',
           }}
         >
-          ⚡ {activeRaids.length} Active Raid{activeRaids.length > 1 ? 's' : ''}
+          {activeRaids.length} Active Raid{activeRaids.length > 1 ? 's' : ''}
         </button>
       )}
 
-      {/* Active Raid Notification Cards */}
+      {/* Active Raid Event Cards */}
       <div
         style={{
           position: 'fixed',
-          top: '58px',
-          right: '18px',
+          top: 'calc(54px + env(safe-area-inset-top, 0px))',
+          right: 'calc(14px + env(safe-area-inset-right, 0px))',
           zIndex: 22,
           display: 'flex',
           flexDirection: 'column',
           gap: '8px',
-          maxWidth: '300px',
+          width: 'min(256px, 68vw)',
           pointerEvents: 'none',
         }}
       >
         {visibleNotifs.map((raid) => {
-          const dist = Math.round(
-            Math.hypot(raid.location.x - playerPos.x, raid.location.z - playerPos.z)
+          const dist = computeDistanceMeters(
+            playerPos.x,
+            playerPos.z,
+            raid.location.x,
+            raid.location.z
+          );
+          const dir = computeCardinalDirection(
+            playerPos.x,
+            playerPos.z,
+            raid.location.x,
+            raid.location.z
           );
           const timeLeft =
             raid.status === 'InProgress'
               ? raid.endTime - nowSec
               : raid.startTime - nowSec;
-          const isExpiringSoon = raid.status === 'InProgress' && timeLeft < 30;
+          const badge = statusBadge(raid.status);
 
           return (
             <div
               key={raid.raidId}
               style={{
                 pointerEvents: 'auto',
-                padding: '10px 12px',
-                borderRadius: '12px',
-                background: 'rgba(15, 23, 42, 0.88)',
-                border: `1.5px solid ${
-                  isExpiringSoon
-                    ? 'rgba(239, 68, 68, 0.8)'
-                    : raid.status === 'InProgress'
-                      ? 'rgba(245, 158, 11, 0.75)'
-                      : 'rgba(168, 85, 247, 0.75)'
-                }`,
-                boxShadow: '0 10px 28px rgba(0, 0, 0, 0.48)',
-                backdropFilter: 'blur(10px)',
+                padding: '9px 11px',
+                borderRadius: '10px',
+                background: 'rgba(11, 14, 21, 0.9)',
+                border: `1px solid ${badge.border}`,
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
+                backdropFilter: 'blur(8px)',
                 color: '#f8fafc',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '6px',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div
-                    style={{
-                      width: '30px',
-                      height: '30px',
-                      borderRadius: '8px',
-                      background: 'linear-gradient(135deg, #581c87, #312e81)',
-                      border: '1px solid rgba(216, 180, 254, 0.5)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '16px',
-                    }}
-                  >
-                    🐺
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span
+                      style={{
+                        fontSize: '9px',
+                        fontWeight: 800,
+                        padding: '1px 5px',
+                        borderRadius: '4px',
+                        border: `1px solid ${badge.border}`,
+                        color: badge.text,
+                      }}
+                    >
+                      {badge.label}
+                    </span>
+                    <span style={{ fontSize: '12px', fontWeight: 800, color: '#f3e8c8' }}>
+                      {raid.bossName}
+                    </span>
                   </div>
-                  <div>
-                    <div style={{ fontSize: '12px', fontWeight: 800, color: '#f3e8ff' }}>
-                      {raid.bossName} · {'★'.repeat(raid.tier)}
-                    </div>
-                    <div style={{ fontSize: '10px', color: '#cbd5e1' }}>
-                      {raid.difficulty} Raid · {raid.locationLabel}
-                    </div>
+                  <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>
+                    {raid.difficulty} T{raid.tier} · {raid.locationLabel}
                   </div>
                 </div>
                 <button
@@ -150,9 +164,9 @@ export const RaidNotifications: React.FC<RaidNotificationsProps> = ({
                     background: 'transparent',
                     border: 'none',
                     color: '#94a3b8',
-                    fontSize: '14px',
+                    fontSize: '13px',
                     cursor: 'pointer',
-                    padding: '2px 4px',
+                    padding: '0 3px',
                   }}
                   aria-label="Dismiss raid notification"
                 >
@@ -165,77 +179,84 @@ export const RaidNotifications: React.FC<RaidNotificationsProps> = ({
                   display: 'flex',
                   justifyContent: 'space-between',
                   fontSize: '11px',
-                  color: '#e2e8f0',
+                  color: '#cbd5e1',
                   fontVariantNumeric: 'tabular-nums',
                 }}
               >
                 <span>
                   {raid.status === 'InProgress'
-                    ? isExpiringSoon
-                      ? `⚠ Expiring: ${formatCountdown(timeLeft)}`
-                      : `Active: ${formatCountdown(timeLeft)}`
-                    : `Starts in: ${formatCountdown(timeLeft)}`}
+                    ? `Ends ${formatCountdown(timeLeft)}`
+                    : `Starts ${formatCountdown(timeLeft)}`}
                 </span>
-                <span style={{ color: '#7dd3fc', fontWeight: 700 }}>{dist}m away</span>
+                <span style={{ color: '#e2c275', fontWeight: 700 }}>
+                  {dist}m {dir}
+                </span>
               </div>
 
               <button
                 type="button"
                 onClick={() => onViewOnMap(raid.raidId)}
                 style={{
-                  padding: '5px 10px',
-                  borderRadius: '7px',
-                  border: '1px solid rgba(192, 132, 252, 0.5)',
-                  background: 'rgba(88, 28, 135, 0.55)',
-                  color: '#f3e8ff',
+                  padding: '5px 8px',
+                  borderRadius: '6px',
+                  border: '1px solid rgba(148, 163, 184, 0.28)',
+                  background: 'rgba(30, 41, 59, 0.75)',
+                  color: '#e2e8f0',
                   fontSize: '11px',
                   fontWeight: 700,
                   cursor: 'pointer',
                 }}
               >
-                View on Island Map [M]
+                Inspect on Map
               </button>
             </div>
           );
         })}
       </div>
 
-      {/* Navigation Waypoint Pill when tracking a raid */}
+      {/* Waypoint Pill when tracking a raid */}
       {trackedRaid && (
         <div
           style={{
             position: 'fixed',
-            top: '94px',
+            bottom: 'calc(78px + env(safe-area-inset-bottom, 0px))',
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 18,
-            padding: '5px 12px',
-            borderRadius: '999px',
-            background: 'rgba(15, 23, 42, 0.82)',
-            border: '1px solid rgba(192, 132, 252, 0.6)',
-            color: '#e9d5ff',
-            fontSize: '12px',
+            padding: '4px 10px',
+            borderRadius: '8px',
+            background: 'rgba(11, 14, 21, 0.88)',
+            border: '1px solid rgba(212, 175, 55, 0.45)',
+            color: '#f3e8c8',
+            fontSize: '11px',
             fontWeight: 700,
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
             pointerEvents: 'auto',
-            backdropFilter: 'blur(8px)',
+            backdropFilter: 'blur(6px)',
           }}
         >
           <span>
-            🧭 {trackedRaid.bossName} ({trackedRaid.locationLabel}) ·{' '}
-            {Math.round(
-              Math.hypot(
-                trackedRaid.location.x - playerPos.x,
-                trackedRaid.location.z - playerPos.z
-              )
+            Waypoint: {trackedRaid.bossName} ·{' '}
+            {computeDistanceMeters(
+              playerPos.x,
+              playerPos.z,
+              trackedRaid.location.x,
+              trackedRaid.location.z
             )}
-            m
+            m{' '}
+            {computeCardinalDirection(
+              playerPos.x,
+              playerPos.z,
+              trackedRaid.location.x,
+              trackedRaid.location.z
+            )}
           </span>
           <button
             type="button"
             onClick={onClearTrack}
+            aria-label="Clear tracked raid"
             style={{
               background: 'transparent',
               border: 'none',

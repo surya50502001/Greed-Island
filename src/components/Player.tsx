@@ -60,6 +60,7 @@ export interface PlayerCombatBridge {
 interface PlayerProps {
   modelUrl?: string;
   playerPosRef: React.MutableRefObject<THREE.Vector3>;
+  playerYawRef?: React.MutableRefObject<number>;
   enemiesRef: React.MutableRefObject<EnemyEntity[]>;
   isFlying: boolean;
   hasWeapon: boolean;
@@ -99,6 +100,7 @@ function pointToSegmentDistXZ(
 export function Player({
   modelUrl = DEFAULT_CHARACTER_MODEL_URL,
   playerPosRef,
+  playerYawRef,
   enemiesRef,
   isFlying,
   hasWeapon,
@@ -154,6 +156,7 @@ export function Player({
     ctrl.yaw = initialSpawn.yaw;
     ctrl.grounded = true;
     playerPosRef.current.copy(ctrl.position);
+    if (playerYawRef) playerYawRef.current = ctrl.yaw;
   }, [initialSpawn, playerPosRef]);
   const animControllerRef = useRef<CharacterAnimationController>(
     new CharacterAnimationController()
@@ -590,6 +593,7 @@ export function Player({
 
     // Sync shared player position ref for Enemies & World
     playerPosRef.current.copy(ctrl.position);
+    if (playerYawRef) playerYawRef.current = ctrl.yaw;
 
     if (onLocalStateBroadcast) {
       onLocalStateBroadcast({

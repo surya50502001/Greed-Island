@@ -85,19 +85,20 @@ export const HUD: React.FC<HUDProps> = ({
           gap: '10px',
         }}
       >
-        {/* Player Health Bar */}
+        {/* Player Health Bar (positioned cleanly below the top-left MiniMap) */}
         <div
           style={{
             alignSelf: 'flex-start',
-            width: '176px',
-            padding: '7px 12px',
-            borderRadius: '12px',
-            background: 'rgba(15, 23, 42, 0.78)',
-            border: '1px solid rgba(255, 255, 255, 0.16)',
+            marginTop: hideKeyboardHints ? '124px' : '152px',
+            width: hideKeyboardHints ? '138px' : '168px',
+            padding: '6px 10px',
+            borderRadius: '10px',
+            background: 'rgba(11, 14, 21, 0.86)',
+            border: '1px solid rgba(212, 175, 55, 0.3)',
             backdropFilter: 'blur(8px)',
             display: 'flex',
             flexDirection: 'column',
-            gap: '5px',
+            gap: '4px',
           }}
         >
           <div

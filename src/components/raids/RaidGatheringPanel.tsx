@@ -21,65 +21,93 @@ export const RaidGatheringPanel: React.FC<RaidGatheringPanelProps> = ({
   const isJoined = raid.participants.some((p) => p.playerId === localPlayerId);
   const prepLeft = Math.max(0, Math.ceil(raid.startTime - nowSec));
   const canStart = isJoined && raid.participants.length >= raid.minParticipants;
+  const statusLabel =
+    raid.status === 'Gathering'
+      ? 'GATHERING'
+      : raid.status === 'Upcoming'
+        ? 'UPCOMING'
+        : raid.status.toUpperCase();
 
   return (
     <div
       style={{
         position: 'fixed',
-        left: '24px',
-        bottom: '92px',
+        left: 'calc(14px + env(safe-area-inset-left, 0px))',
+        bottom: 'calc(162px + env(safe-area-inset-bottom, 0px))',
         zIndex: 24,
-        width: '295px',
-        padding: '14px',
-        borderRadius: '14px',
-        background: 'rgba(15, 23, 42, 0.9)',
-        border: '1.5px solid rgba(168, 85, 247, 0.7)',
-        boxShadow: '0 14px 36px rgba(0,0,0,0.55)',
-        backdropFilter: 'blur(10px)',
-        color: '#f8fafc',
+        width: 'min(284px, 84vw)',
+        padding: '12px 14px',
+        borderRadius: '10px',
+        background: 'rgba(11, 14, 21, 0.92)',
+        border: '1px solid rgba(212, 175, 55, 0.36)',
+        boxShadow: '0 12px 30px rgba(0, 0, 0, 0.58)',
+        backdropFilter: 'blur(8px)',
+        color: '#f1f5f9',
         display: 'flex',
         flexDirection: 'column',
         gap: '8px',
         pointerEvents: 'auto',
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: '13px', fontWeight: 800, color: '#e9d5ff' }}>
-          ⚔️ {raid.bossName} Raid Zone
-        </span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: '13px', fontWeight: 800, color: '#f3e8c8' }}>
+            {raid.bossName} Raid Zone
+          </div>
+          <div style={{ fontSize: '10px', color: '#94a3b8' }}>
+            {raid.difficulty} · Tier {raid.tier}
+          </div>
+        </div>
         <span
           style={{
-            fontSize: '10px',
-            fontWeight: 700,
+            fontSize: '9px',
+            fontWeight: 800,
+            letterSpacing: '0.06em',
             padding: '2px 7px',
-            borderRadius: '999px',
-            background: 'rgba(88, 28, 135, 0.75)',
-            color: '#f3e8ff',
+            borderRadius: '4px',
+            background: 'rgba(146, 64, 14, 0.32)',
+            border: '1px solid rgba(217, 119, 6, 0.55)',
+            color: '#fde68a',
+            flexShrink: 0,
           }}
         >
-          {raid.difficulty} · T{raid.tier}
+          {statusLabel}
         </span>
       </div>
 
-      <div style={{ fontSize: '11px', color: '#cbd5e1', display: 'grid', gap: '3px' }}>
-        <div>
-          Prep Countdown: <strong style={{ color: '#fde047' }}>{prepLeft}s</strong>
+      <div
+        style={{
+          fontSize: '11px',
+          color: '#cbd5e1',
+          display: 'grid',
+          gap: '3px',
+          borderTop: '1px solid rgba(148, 163, 184, 0.14)',
+          paddingTop: '6px',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ color: '#94a3b8' }}>Starts In</span>
+          <strong style={{ color: '#fde68a', fontVariantNumeric: 'tabular-nums' }}>{prepLeft}s</strong>
         </div>
-        <div>
-          Participants:{' '}
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ color: '#94a3b8' }}>Hunters</span>
           <strong>
-            {raid.participants.length} / {raid.maxParticipants}
-          </strong>{' '}
-          (Min {raid.minParticipants} · Rec {raid.recommendedPartySize})
+            {raid.participants.length} / {raid.maxParticipants} (Rec {raid.recommendedPartySize})
+          </strong>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ color: '#94a3b8' }}>Reward</span>
+          <span style={{ color: '#e2e8f0' }}>Boss Card Drop</span>
         </div>
       </div>
 
       {raid.participants.length > 0 && (
         <div
           style={{
-            padding: '6px 8px',
-            borderRadius: '8px',
-            background: 'rgba(30, 41, 59, 0.7)',
+            padding: '5px 8px',
+            borderRadius: '6px',
+            background: 'rgba(20, 26, 38, 0.85)',
+            border: '1px solid rgba(148, 163, 184, 0.14)',
             fontSize: '11px',
             color: '#e2e8f0',
           }}
@@ -99,11 +127,12 @@ export const RaidGatheringPanel: React.FC<RaidGatheringPanelProps> = ({
             onClick={() => onJoin(raid.raidId)}
             style={{
               flex: 1,
+              minHeight: '38px',
               padding: '7px 10px',
-              borderRadius: '8px',
-              border: '1px solid rgba(56, 189, 248, 0.7)',
-              background: 'linear-gradient(135deg, #0284c7, #4f46e5)',
-              color: '#ffffff',
+              borderRadius: '7px',
+              border: '1px solid rgba(212, 175, 55, 0.55)',
+              background: 'rgba(146, 64, 14, 0.65)',
+              color: '#fef3c7',
               fontSize: '12px',
               fontWeight: 700,
               cursor: 'pointer',
@@ -117,9 +146,10 @@ export const RaidGatheringPanel: React.FC<RaidGatheringPanelProps> = ({
               type="button"
               onClick={() => onLeave(raid.raidId)}
               style={{
+                minHeight: '38px',
                 padding: '7px 10px',
-                borderRadius: '8px',
-                border: '1px solid rgba(148, 163, 184, 0.4)',
+                borderRadius: '7px',
+                border: '1px solid rgba(148, 163, 184, 0.3)',
                 background: 'rgba(30, 41, 59, 0.85)',
                 color: '#cbd5e1',
                 fontSize: '11px',
@@ -135,12 +165,11 @@ export const RaidGatheringPanel: React.FC<RaidGatheringPanelProps> = ({
               onClick={() => onBeginEncounter(raid.raidId)}
               style={{
                 flex: 1,
+                minHeight: '38px',
                 padding: '7px 10px',
-                borderRadius: '8px',
-                border: '1px solid rgba(250, 204, 21, 0.7)',
-                background: canStart
-                  ? 'linear-gradient(135deg, #9333ea, #db2777)'
-                  : 'rgba(51, 65, 85, 0.6)',
+                borderRadius: '7px',
+                border: '1px solid rgba(220, 38, 38, 0.6)',
+                background: canStart ? 'rgba(153, 27, 27, 0.82)' : 'rgba(51, 65, 85, 0.6)',
                 color: '#ffffff',
                 fontSize: '12px',
                 fontWeight: 700,

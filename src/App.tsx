@@ -26,6 +26,7 @@ import {
 } from './domain/cards/rules';
 import { getGroundHeight, getTerrainHeight } from './world/terrain';
 import { World } from './components/World';
+import { MiniMap } from './components/MiniMap';
 import { createInitialEnemies, Enemies, EnemyEntity } from './components/Enemies';
 import {
   FloatingDamageEvent,
@@ -155,6 +156,7 @@ export function App() {
 
 
   const playerPosRef = useRef<THREE.Vector3>(new THREE.Vector3(0, getGroundHeight(0, 0), 0));
+  const playerYawRef = useRef<number>(0);
   const enemiesRef = useRef<EnemyEntity[]>(createInitialEnemies());
   const combatBridgeRef = useRef<PlayerCombatBridge | null>(null);
   const touchBridgeRef = useRef<PlayerTouchBridge | null>(null);
@@ -862,6 +864,7 @@ export function App() {
           />
           <Player
             playerPosRef={playerPosRef}
+            playerYawRef={playerYawRef}
             enemiesRef={enemiesRef}
             isFlying={isFlying}
             hasWeapon={hasWeapon}
@@ -974,6 +977,19 @@ export function App() {
           onBeginEncounter={handleBeginEncounter}
         />
       )}
+      <MiniMap
+        playerPosRef={playerPosRef}
+        playerYawRef={playerYawRef}
+        remoteSnapshotsRef={remoteSnapshotsRef}
+        raids={raidsRef.current}
+        trackedRaidId={trackedRaidId}
+        isCompact={isTouchVisible}
+        hidden={isLobbyOpen || isMapOpen || isGrimoireOpen || isDead}
+        onOpenFullMap={() => {
+          setIsGrimoireOpen(false);
+          setIsMapOpen(true);
+        }}
+      />
       <IslandMapModal
         isOpen={isMapOpen && !isDead}
         raids={raidsRef.current}
@@ -982,6 +998,8 @@ export function App() {
           y: playerPosRef.current.y,
           z: playerPosRef.current.z,
         }}
+        playerYaw={playerYawRef.current}
+        remotePlayers={Object.values(remoteSnapshotsRef.current)}
         nowSec={raidUiTick}
         selectedRaidId={selectedMapRaidId}
         trackedRaidId={trackedRaidId}

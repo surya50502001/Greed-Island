@@ -855,10 +855,68 @@ export function GrimoireOverlay({
           type="button"
           className="grimoire-close-btn"
           onClick={onClose}
-          style={{ position: 'absolute', top: -40, right: 0 }}
         >
           ✕ Close Grimoire [G / Esc]
         </button>
+
+        {/* Active 4-Slot Loadout Bar (clearly separated from owned card inventory) */}
+        <div className="grimoire-active-loadout-bar">
+          <div className="grimoire-active-loadout-title">ACTIVE DECK SLOTS (1–4)</div>
+          <div className="grimoire-active-loadout-grid">
+            {loadout.slots.map((slotCardId, idx) => {
+              const slotDef = slotCardId
+                ? CARD_DEFINITIONS.find((c) => c.id === slotCardId)
+                : undefined;
+              const slotEntry = slotCardId ? inventory.cards[slotCardId] : undefined;
+              const slotCd = slotCardId ? cooldowns[slotCardId] ?? 0 : 0;
+              const slotActive = slotCardId ? activeMap[slotCardId] ?? false : false;
+              return (
+                <div
+                  key={idx}
+                  className={`grimoire-loadout-chip ${slotActive ? 'is-active' : ''}`}
+                  style={{
+                    borderColor: slotActive
+                      ? '#22c55e'
+                      : slotDef
+                        ? getComputedRarityAccent(slotDef.rarity)
+                        : 'rgba(148, 163, 184, 0.22)',
+                  }}
+                >
+                  <button
+                    type="button"
+                    disabled={!slotCardId}
+                    onClick={() => {
+                      if (slotCardId) setSelectedCardId(slotCardId);
+                    }}
+                    className="grimoire-loadout-chip-main"
+                  >
+                    <span className="grimoire-loadout-slot-num">SLOT {idx + 1}</span>
+                    <span className="grimoire-loadout-slot-name">
+                      {slotDef ? slotDef.name : 'Empty'}
+                    </span>
+                    <span className="grimoire-loadout-slot-meta">
+                      {slotEntry
+                        ? slotCd > 0
+                          ? `CD ${Math.ceil(slotCd)}s`
+                          : `Lv.${slotEntry.level}`
+                        : 'Tap card below to equip'}
+                    </span>
+                  </button>
+                  {slotCardId && (
+                    <button
+                      type="button"
+                      aria-label={`Unequip slot ${idx + 1}`}
+                      onClick={() => onUnequipSlot(idx as ActiveCardSlotIndex)}
+                      className="grimoire-loadout-unequip"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
         {/* THE BOOK */}
         <div className={`grimoire-book ${pageTurning ? 'grimoire-page-turn-anim' : ''}`}>
