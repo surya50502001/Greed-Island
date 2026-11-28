@@ -1,6 +1,7 @@
 using GreedIsland.Server.Models;
 using GreedIsland.Server.Services;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
 
 namespace GreedIsland.Server.Hubs;
 
@@ -19,23 +20,36 @@ public sealed class GameHub(
     WorldManager world,
     GameStateManager gameState,
     CombatManager combat,
-    IHubContext<GameHub> hubContext) : Hub
+    IHubContext<GameHub> hubContext,
+    ILogger<GameHub> logger) : Hub
 {
     public async Task<WorldEnterResult> EnterWorld(string characterName)
     {
         var (isValid, normalizedName, error) = PlayerSessionManager.ValidateCharacterName(characterName);
         if (!isValid)
         {
+            logger.LogWarning(
+                "EnterWorld rejected for ConnectionId={ConnectionId}: {Error}",
+                Context.ConnectionId,
+                error
+            );
             return new WorldEnterResult { Success = false, Error = error };
         }
 
-        // Clean up any prior session on this connection
+        // Clean up any prior session on this connection before re-subscribing
         var prior = sessions.MarkDisconnected(Context.ConnectionId);
         if (prior is not null)
         {
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, WorldManager.MainWorldGroup);
             if (world.RemovePlayer(prior.PlayerId))
             {
+                logger.LogInformation(
+                    "Cleaned up prior session PlayerId={PlayerId} Name={CharacterName} ConnectionId={ConnectionId}; RemainingPlayers={Count}",
+                    prior.PlayerId,
+                    prior.CharacterName,
+                    Context.ConnectionId,
+                    world.GetAllPlayers().Length
+                );
                 await Clients.Group(WorldManager.MainWorldGroup).SendAsync("PlayerLeft", new
                 {
                     playerId = prior.PlayerId,
@@ -44,10 +58,21 @@ public sealed class GameHub(
             }
         }
 
-        var session = sessions.CreateSession(Context.ConnectionId, normalizedName);
-        var selfSnapshot = world.EnterWorld(session);
-
+        // CRITICAL: Subscribe to the shared world group BEFORE inserting into WorldManager
+        // and capturing the world snapshot so concurrent joins cannot miss each other's PlayerJoined.
         await Groups.AddToGroupAsync(Context.ConnectionId, WorldManager.MainWorldGroup);
+
+        var session = sessions.CreateSession(Context.ConnectionId, normalizedName);
+        var (selfSnapshot, allPlayers) = world.EnterWorldAndSnapshot(session);
+
+        logger.LogInformation(
+            "Player entered shared world: PlayerId={PlayerId} Name={CharacterName} ConnectionId={ConnectionId} WorldPlayers={Count}",
+            session.PlayerId,
+            session.CharacterName,
+            Context.ConnectionId,
+            allPlayers.Length
+        );
+
         await Clients.OthersInGroup(WorldManager.MainWorldGroup).SendAsync("PlayerJoined", selfSnapshot);
 
         return new WorldEnterResult
@@ -56,7 +81,7 @@ public sealed class GameHub(
             PlayerId = session.PlayerId,
             ReconnectToken = session.ReconnectToken,
             CharacterName = session.CharacterName,
-            Players = world.GetAllPlayers(),
+            Players = allPlayers,
         };
     }
 
@@ -73,11 +98,27 @@ public sealed class GameHub(
         );
         if (!ok || session is null)
         {
+            logger.LogWarning(
+                "ReconnectWorld failed for PlayerId={PlayerId} ConnectionId={ConnectionId}: {Error}",
+                playerId,
+                Context.ConnectionId,
+                error
+            );
             return new WorldEnterResult { Success = false, Error = error ?? "Reconnect failed." };
         }
 
-        var selfSnapshot = world.EnterWorld(session);
+        // Subscribe to shared world group before inserting/snapshotting
         await Groups.AddToGroupAsync(Context.ConnectionId, WorldManager.MainWorldGroup);
+        var (selfSnapshot, allPlayers) = world.EnterWorldAndSnapshot(session);
+
+        logger.LogInformation(
+            "ReconnectWorld succeeded: PlayerId={PlayerId} Name={CharacterName} ConnectionId={ConnectionId} WorldPlayers={Count}",
+            session.PlayerId,
+            session.CharacterName,
+            Context.ConnectionId,
+            allPlayers.Length
+        );
+
         await Clients.OthersInGroup(WorldManager.MainWorldGroup).SendAsync("PlayerJoined", selfSnapshot);
 
         return new WorldEnterResult
@@ -86,7 +127,7 @@ public sealed class GameHub(
             PlayerId = session.PlayerId,
             ReconnectToken = session.ReconnectToken,
             CharacterName = session.CharacterName,
-            Players = world.GetAllPlayers(),
+            Players = allPlayers,
         };
     }
 
@@ -146,10 +187,18 @@ public sealed class GameHub(
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, WorldManager.MainWorldGroup);
             if (world.RemovePlayer(session.PlayerId))
             {
+                var remaining = world.GetAllPlayers();
+                logger.LogInformation(
+                    "Player left shared world: PlayerId={PlayerId} Name={CharacterName} ConnectionId={ConnectionId} RemainingPlayers={Count}",
+                    session.PlayerId,
+                    session.CharacterName,
+                    Context.ConnectionId,
+                    remaining.Length
+                );
                 await Clients.Group(WorldManager.MainWorldGroup).SendAsync("PlayerLeft", new
                 {
                     playerId = session.PlayerId,
-                    players = world.GetAllPlayers(),
+                    players = remaining,
                 });
             }
         }

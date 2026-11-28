@@ -80,6 +80,7 @@ import { RaidEncounterHUD } from './components/raids/RaidEncounterHUD';
 import { RaidRewardModal } from './components/raids/RaidRewardModal';
 import {
   applyWorldDamage,
+  mergeWorldPlayers,
   removeWorldPlayer,
   upsertWorldPlayer,
 } from './domain/multiplayer/validation';
@@ -321,7 +322,7 @@ export function App() {
               remoteSnapshotsRef.current[p.playerId] = p;
             }
           }
-          setMpRoomPlayers(res.players);
+          setMpRoomPlayers((prev) => mergeWorldPlayers(prev, res.players, selfId));
         });
       },
       onDisconnected: () => {
@@ -346,14 +347,20 @@ export function App() {
         mpCharNameRef.current = res.characterName ?? characterName;
         setMpLocalPlayerId(res.playerId ?? null);
         setMpCharacterName(res.characterName ?? characterName);
-        setMpRoomPlayers(res.players);
+        setMpRoomPlayers((prev) =>
+          mergeWorldPlayers(prev, res.players, res.playerId ?? null)
+        );
 
         for (const p of res.players) {
           if (p.playerId === res.playerId) {
+            delete remoteSnapshotsRef.current[p.playerId];
             setMpLocalSpawn({ x: p.x, y: p.y, z: p.z, yaw: p.yaw });
             setPlayerHp(p.currentHealth);
           } else {
-            remoteSnapshotsRef.current[p.playerId] = p;
+            const existing = remoteSnapshotsRef.current[p.playerId];
+            if (!existing || p.timestampMs >= existing.timestampMs) {
+              remoteSnapshotsRef.current[p.playerId] = p;
+            }
           }
         }
         setIsMultiplayerActive(true);

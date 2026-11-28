@@ -65,6 +65,29 @@ export function removeWorldPlayer(
   return players.filter((p) => p.playerId !== playerId);
 }
 
+/**
+ * Merges an authoritative snapshot list (e.g. from EnterWorld) with any live PlayerJoined
+ * events that arrived while the request was in flight, deduplicated by playerId.
+ */
+export function mergeWorldPlayers(
+  existing: SharedWorldPlayer[],
+  authoritative: SharedWorldPlayer[],
+  selfPlayerId?: string | null
+): SharedWorldPlayer[] {
+  const byId = new Map<string, SharedWorldPlayer>();
+  for (const p of existing) {
+    if (selfPlayerId && p.playerId === selfPlayerId) continue;
+    byId.set(p.playerId, p);
+  }
+  for (const p of authoritative) {
+    const prev = byId.get(p.playerId);
+    if (!prev || p.timestampMs >= prev.timestampMs) {
+      byId.set(p.playerId, p);
+    }
+  }
+  return Array.from(byId.values());
+}
+
 export function applyWorldDamage(
   players: SharedWorldPlayer[],
   targetPlayerId: string,

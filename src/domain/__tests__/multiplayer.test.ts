@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyWorldDamage,
+  mergeWorldPlayers,
   removeWorldPlayer,
   SharedWorldPlayer,
   upsertWorldPlayer,
@@ -72,5 +73,16 @@ describe('multiplayer shared-world validation & state helpers', () => {
     players = removeWorldPlayer(players, 'p1');
     expect(players).toHaveLength(1);
     expect(players[0].playerId).toBe('p2');
+  });
+
+  it('merges initial EnterWorld snapshot with in-flight PlayerJoined events without losing or duplicating players', () => {
+    const kai = makePlayer({ playerId: 'p-kai', characterName: 'KAI', timestampMs: 100 });
+    const itachiLive = makePlayer({ playerId: 'p-itachi', characterName: 'itachi', timestampMs: 250 });
+    const gon = makePlayer({ playerId: 'p-gon', characterName: 'Gon', timestampMs: 200 });
+
+    // Simulate itachi arriving via PlayerJoined before KAI's EnterWorld response resolves
+    const merged = mergeWorldPlayers([itachiLive], [kai, gon], 'p-kai');
+    expect(merged.map((p) => p.playerId).sort()).toEqual(['p-gon', 'p-itachi', 'p-kai'].sort());
+    expect(merged.find((p) => p.playerId === 'p-itachi')?.timestampMs).toBe(250);
   });
 });

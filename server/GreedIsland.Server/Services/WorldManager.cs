@@ -28,14 +28,21 @@ public sealed class WorldManager
         return (x, PlazaSpawnHeight, z, 0.0);
     }
 
-    public PlayerSnapshot EnterWorld(PlayerSession session)
+    public PlayerSnapshot EnterWorld(PlayerSession session) =>
+        EnterWorldAndSnapshot(session).Self;
+
+    /// <summary>
+    /// Atomically inserts or refreshes the player's world snapshot and captures the full world
+    /// player list under the same lock so concurrent joins cannot miss each other.
+    /// </summary>
+    public (PlayerSnapshot Self, PlayerSnapshot[] AllPlayers) EnterWorldAndSnapshot(PlayerSession session)
     {
         lock (SyncRoot)
         {
             if (_players.TryGetValue(session.PlayerId, out var existing))
             {
                 existing.TimestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                return existing;
+                return (existing, _players.Values.ToArray());
             }
 
             var spawn = NextPlazaSpawn();
@@ -54,7 +61,7 @@ public sealed class WorldManager
                 TimestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
             _players[session.PlayerId] = snapshot;
-            return snapshot;
+            return (snapshot, _players.Values.ToArray());
         }
     }
 
