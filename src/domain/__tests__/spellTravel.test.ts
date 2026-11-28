@@ -6,9 +6,10 @@ import {
   SPELL_WEAPON_POOL,
 } from '../cards/spellTravel';
 import { CARD_DEFINITIONS } from '../cards/types';
+import { createStarterInventory } from '../cards/rules';
 
 describe('Greed Island spell travel & summoning cards', () => {
-  it('registers all five spell cards in CARD_DEFINITIONS', () => {
+  it('registers all five spell cards in CARD_DEFINITIONS and gives 1 copy of every card in starter inventory', () => {
     const ids = new Set(CARD_DEFINITIONS.map((c) => c.id));
     expect(ids.has('accompany')).toBe(true);
     expect(ids.has('magnetic_force')).toBe(true);
@@ -16,6 +17,11 @@ describe('Greed Island spell travel & summoning cards', () => {
     expect(ids.has('drift')).toBe(true);
     expect(ids.has('summon_weapon')).toBe(true);
     expect(SPELL_WEAPON_POOL).toEqual(['Sword', 'Greatsword', 'Spear', 'Axe', 'Dagger', 'Bow']);
+
+    const starter = createStarterInventory();
+    for (const def of CARD_DEFINITIONS) {
+      expect(starter.cards[def.id]).toEqual({ cardId: def.id, level: 1, duplicates: 0 });
+    }
   });
 
   it('transitions travel state machine from Preparing/Launching -> Transforming -> Flying -> Descending -> Arriving -> Completed', () => {

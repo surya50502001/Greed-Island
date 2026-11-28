@@ -2,6 +2,7 @@ import {
   ActiveCardLoadout,
   ActiveCardSlotIndex,
   AnyCardId,
+  CARD_DEFINITIONS,
   CardCooldownMap,
   CardDefinition,
   CardInventory,
@@ -19,12 +20,10 @@ export function createEmptyLoadout(): ActiveCardLoadout {
 }
 
 export function createStarterInventory(): CardInventory {
-  let inv = addCardToInventory(createEmptyInventory(), 'weapon', 1);
-  inv = addCardToInventory(inv, 'accompany', 1);
-  inv = addCardToInventory(inv, 'magnetic_force', 1);
-  inv = addCardToInventory(inv, 'return', 1);
-  inv = addCardToInventory(inv, 'drift', 1);
-  inv = addCardToInventory(inv, 'summon_weapon', 1);
+  let inv = createEmptyInventory();
+  for (const def of CARD_DEFINITIONS) {
+    inv = addCardToInventory(inv, def.id, 1);
+  }
   return inv;
 }
 
