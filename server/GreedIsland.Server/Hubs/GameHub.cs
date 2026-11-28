@@ -20,6 +20,26 @@ public sealed class GameHub(
     RoomManager rooms,
     GameStateManager gameState) : Hub
 {
+    private async Task DetachExistingSessionAsync()
+    {
+        var existing = sessions.RemoveByConnection(Context.ConnectionId);
+        if (existing is null) return;
+
+        if (!string.IsNullOrEmpty(existing.RoomCode))
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, existing.RoomCode);
+            var (oldRoom, removed) = rooms.RemovePlayer(existing);
+            if (removed && oldRoom is not null)
+            {
+                await Clients.Group(oldRoom.RoomCode).SendAsync("PlayerLeft", new
+                {
+                    playerId = existing.PlayerId,
+                    players = oldRoom.Players.Values.ToArray(),
+                });
+            }
+        }
+    }
+
     public async Task<RoomActionResult> CreateRoom(string characterName)
     {
         var (isValid, normalizedName, error) = PlayerSessionManager.ValidateCharacterName(characterName);
@@ -28,11 +48,7 @@ public sealed class GameHub(
             return new RoomActionResult { Success = false, Error = error };
         }
 
-        var existing = sessions.RemoveByConnection(Context.ConnectionId);
-        if (existing is not null)
-        {
-            rooms.RemovePlayer(existing);
-        }
+        await DetachExistingSessionAsync();
 
         var session = sessions.CreateOrUpdateSession(Context.ConnectionId, normalizedName);
         var room = rooms.CreateRoom(session);
@@ -58,11 +74,7 @@ public sealed class GameHub(
             return new RoomActionResult { Success = false, Error = error };
         }
 
-        var existing = sessions.RemoveByConnection(Context.ConnectionId);
-        if (existing is not null)
-        {
-            rooms.RemovePlayer(existing);
-        }
+        await DetachExistingSessionAsync();
 
         var session = sessions.CreateOrUpdateSession(Context.ConnectionId, normalizedName);
         var (joined, joinError, room) = rooms.JoinRoom(session, roomCode);
@@ -102,6 +114,53 @@ public sealed class GameHub(
         };
     }
 
+    public async Task<RoomActionResult> ReconnectToRoom(
+        string playerId,
+        string characterName,
+        string roomCode)
+    {
+        var (isValid, normalizedName, error) = PlayerSessionManager.ValidateCharacterName(characterName);
+        if (!isValid || string.IsNullOrWhiteSpace(playerId))
+        {
+            return new RoomActionResult { Success = false, Error = error ?? "Invalid session." };
+        }
+
+        await DetachExistingSessionAsync();
+
+        var session = sessions.CreateOrUpdateSession(Context.ConnectionId, normalizedName, playerId);
+        var (ok, recError, room) = rooms.ReconnectPlayer(session, roomCode);
+        if (!ok || room is null)
+        {
+            sessions.RemoveByConnection(Context.ConnectionId);
+            return new RoomActionResult { Success = false, Error = recError };
+        }
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, room.RoomCode);
+
+        var players = room.Players.Values.ToArray();
+        await Clients.OthersInGroup(room.RoomCode).SendAsync("RoomUpdated", new
+        {
+            roomCode = room.RoomCode,
+            isReady = room.IsReady,
+            players,
+        });
+
+        return new RoomActionResult
+        {
+            Success = true,
+            RoomCode = room.RoomCode,
+            PlayerId = session.PlayerId,
+            CharacterName = session.CharacterName,
+            IsReady = room.IsReady,
+            Players = players,
+        };
+    }
+
+    public async Task LeaveRoom()
+    {
+        await DetachExistingSessionAsync();
+    }
+
     public async Task SendMovement(MovementInputDto input)
     {
         var session = sessions.GetByConnection(Context.ConnectionId);
@@ -110,7 +169,8 @@ public sealed class GameHub(
         var room = rooms.GetRoom(session.RoomCode);
         if (room is null || !room.IsReady) return;
 
-        if (gameState.TryApplyMovement(room, session.PlayerId, input, out var snapshot) && snapshot is not null)
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (gameState.TryApplyMovement(room, session, input, nowMs, out var snapshot) && snapshot is not null)
         {
             await Clients.OthersInGroup(room.RoomCode).SendAsync("PlayerMoved", snapshot);
         }
@@ -118,19 +178,7 @@ public sealed class GameHub(
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        var session = sessions.RemoveByConnection(Context.ConnectionId);
-        if (session is not null)
-        {
-            var (room, removed) = rooms.RemovePlayer(session);
-            if (removed && room is not null)
-            {
-                await Clients.Group(room.RoomCode).SendAsync("PlayerLeft", new
-                {
-                    playerId = session.PlayerId,
-                    players = room.Players.Values.ToArray(),
-                });
-            }
-        }
+        await DetachExistingSessionAsync();
         await base.OnDisconnectedAsync(exception);
     }
 }

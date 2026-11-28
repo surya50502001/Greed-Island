@@ -4,6 +4,7 @@ import {
   validateCharacterName,
   validateRoomCode,
 } from '../multiplayer/validation';
+import { resolveMultiplayerHubUrl } from '../../network/SignalRClient';
 
 describe('multiplayer character identity and room validation', () => {
   it('rejects empty, whitespace-only, short, or invalid character names', () => {
@@ -29,5 +30,13 @@ describe('multiplayer character identity and room validation', () => {
     expect(validateRoomCode('gi4k9p').valid).toBe(true);
     expect(validateRoomCode('ABC').valid).toBe(false);
     expect(validateRoomCode('AB-123').valid).toBe(false);
+  });
+
+  it('uses localhost only in dev and requires VITE_MULTIPLAYER_URL in production', () => {
+    expect(resolveMultiplayerHubUrl(undefined, true)).toBe('http://localhost:5000/hubs/game');
+    expect(resolveMultiplayerHubUrl(undefined, false)).toBeNull();
+    expect(resolveMultiplayerHubUrl('https://api.example.com/hubs/game', false)).toBe(
+      'https://api.example.com/hubs/game'
+    );
   });
 });

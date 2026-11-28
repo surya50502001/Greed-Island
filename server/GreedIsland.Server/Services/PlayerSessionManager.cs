@@ -32,11 +32,24 @@ public sealed partial class PlayerSessionManager
         return (true, trimmed, null);
     }
 
-    public PlayerSession CreateOrUpdateSession(string connectionId, string characterName)
+    public PlayerSession CreateOrUpdateSession(string connectionId, string characterName, string? existingPlayerId = null)
     {
+        var playerId = !string.IsNullOrWhiteSpace(existingPlayerId)
+            ? existingPlayerId
+            : $"p_{Guid.NewGuid():N}"[..14];
+
+        // Remove any stale connection entries belonging to the same PlayerId
+        foreach (var kvp in _byConnection)
+        {
+            if (kvp.Value.PlayerId == playerId && kvp.Key != connectionId)
+            {
+                _byConnection.TryRemove(kvp.Key, out _);
+            }
+        }
+
         var session = new PlayerSession
         {
-            PlayerId = $"p_{Guid.NewGuid():N}"[..14],
+            PlayerId = playerId,
             ConnectionId = connectionId,
             CharacterName = characterName,
         };

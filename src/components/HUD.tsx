@@ -7,6 +7,7 @@ import {
   CardInventory,
 } from '../domain/cards/types';
 import { FloatingDamageEvent } from './Player';
+import { ConnectionStatus } from '../network/SignalRClient';
 
 export interface ActiveDamageNumber extends FloatingDamageEvent {
   id: number;
@@ -30,6 +31,7 @@ interface HUDProps {
   loadout?: ActiveCardLoadout;
   cooldowns?: CardCooldownMap;
   onActivateSlotCard?: (cardId: AnyCardId) => void;
+  multiplayerStatus?: ConnectionStatus | null;
   onRevive: () => void;
 }
 
@@ -51,6 +53,7 @@ export const HUD: React.FC<HUDProps> = ({
   loadout,
   cooldowns = {},
   onActivateSlotCard,
+  multiplayerStatus = null,
   onRevive,
 }) => {
   const isInvisible = invisTimer > 0;
@@ -134,6 +137,35 @@ export const HUD: React.FC<HUDProps> = ({
 
         {/* Active ability pills */}
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+          {multiplayerStatus && (
+            <div
+              style={{
+                padding: '6px 12px',
+                borderRadius: '999px',
+                background: 'rgba(15, 23, 42, 0.78)',
+                border: `1px solid ${
+                  multiplayerStatus === 'connected'
+                    ? 'rgba(74, 222, 128, 0.65)'
+                    : multiplayerStatus === 'reconnecting'
+                      ? 'rgba(250, 204, 21, 0.7)'
+                      : 'rgba(248, 113, 113, 0.7)'
+                }`,
+                color: '#f8fafc',
+                fontSize: '12px',
+                fontWeight: 600,
+                backdropFilter: 'blur(8px)',
+              }}
+            >
+              {multiplayerStatus === 'connected'
+                ? '🟢 Online'
+                : multiplayerStatus === 'reconnecting'
+                  ? '🟡 Reconnecting...'
+                  : multiplayerStatus === 'connecting'
+                    ? '🟡 Connecting...'
+                    : '🔴 Disconnected'}
+            </div>
+          )}
+
           {isFlying && (
             <div
               style={{

@@ -73,6 +73,7 @@ import { RaidGatheringPanel } from './components/raids/RaidGatheringPanel';
 import { RaidEncounterHUD } from './components/raids/RaidEncounterHUD';
 import { RaidRewardModal } from './components/raids/RaidRewardModal';
 import {
+  ConnectionStatus,
   GreedSignalRClient,
   MovementInputPayload,
   RemotePlayerSnapshot,
@@ -99,6 +100,7 @@ export function App() {
   const [isMultiplayerActive, setIsMultiplayerActive] = useState(false);
   const [mpBusy, setMpBusy] = useState(false);
   const [mpStatus, setMpStatus] = useState<string | null>(null);
+  const [mpConnectionStatus, setMpConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [mpRoomCode, setMpRoomCode] = useState<string | null>(null);
   const [mpLocalPlayerId, setMpLocalPlayerId] = useState<string | null>(null);
   const [mpCharacterName, setMpCharacterName] = useState<string | null>(null);
@@ -109,6 +111,10 @@ export function App() {
     z: number;
     yaw: number;
   } | null>(null);
+
+  const mpSelfIdRef = useRef<string | null>(null);
+  const mpRoomCodeRef = useRef<string | null>(null);
+  const mpCharNameRef = useRef<string | null>(null);
 
   // Local Card Inventory, 4-Slot Loadout, Cooldowns, & Progression Materials
   const [cardInventory, setCardInventory] = useState<CardInventory>(() =>
@@ -181,63 +187,97 @@ export function App() {
 
   const isDead = playerHp <= 0;
 
-  const ensureSignalRConnected = useCallback(
-    async (myPlayerIdRef: React.MutableRefObject<string | null>) => {
-      if (!signalRRef.current) {
-        signalRRef.current = new GreedSignalRClient();
-      }
-      await signalRRef.current.connect({
-        onRoomUpdated: (payload) => {
-          setMpRoomPlayers(payload.players);
-        },
-        onWorldReady: (payload) => {
-          const selfId = myPlayerIdRef.current;
-          setMpRoomPlayers(payload.players);
-          for (const p of payload.players) {
-            if (p.playerId === selfId) {
-              setMpLocalSpawn({ x: p.x, y: p.y, z: p.z, yaw: p.yaw });
-            } else {
+  const ensureSignalRConnected = useCallback(async () => {
+    if (!signalRRef.current) {
+      signalRRef.current = new GreedSignalRClient();
+    }
+    await signalRRef.current.connect({
+      onConnectionStateChange: (status) => {
+        setMpConnectionStatus(status);
+      },
+      onRoomUpdated: (payload) => {
+        const selfId = mpSelfIdRef.current;
+        for (const p of payload.players) {
+          if (p.playerId !== selfId) {
+            remoteSnapshotsRef.current[p.playerId] = p;
+          }
+        }
+        setMpRoomPlayers(payload.players);
+      },
+      onWorldReady: (payload) => {
+        const selfId = mpSelfIdRef.current;
+        setMpRoomPlayers(payload.players);
+        for (const p of payload.players) {
+          if (p.playerId === selfId) {
+            setMpLocalSpawn({ x: p.x, y: p.y, z: p.z, yaw: p.yaw });
+          } else {
+            remoteSnapshotsRef.current[p.playerId] = p;
+          }
+        }
+        setIsMultiplayerActive(true);
+        setIsLobbyOpen(false);
+      },
+      onPlayerMoved: (snapshot) => {
+        remoteSnapshotsRef.current[snapshot.playerId] = snapshot;
+      },
+      onPlayerLeft: (payload) => {
+        delete remoteSnapshotsRef.current[payload.playerId];
+        setMpRoomPlayers(payload.players);
+      },
+      onReconnected: () => {
+        const selfId = mpSelfIdRef.current;
+        const charName = mpCharNameRef.current;
+        const code = mpRoomCodeRef.current;
+        if (!selfId || !charName || !code || !signalRRef.current) return;
+        void signalRRef.current.reconnectToRoom(selfId, charName, code).then((res) => {
+          if (!res.success) {
+            setMpStatus(res.error ?? 'Failed to restore room after reconnect.');
+            return;
+          }
+          const activeIds = new Set(res.players.map((p) => p.playerId));
+          for (const existingId of Object.keys(remoteSnapshotsRef.current)) {
+            if (!activeIds.has(existingId)) {
+              delete remoteSnapshotsRef.current[existingId];
+            }
+          }
+          for (const p of res.players) {
+            if (p.playerId !== selfId) {
               remoteSnapshotsRef.current[p.playerId] = p;
             }
           }
-          setIsMultiplayerActive(true);
-          setIsLobbyOpen(false);
-        },
-        onPlayerMoved: (snapshot) => {
-          remoteSnapshotsRef.current[snapshot.playerId] = snapshot;
-        },
-        onPlayerLeft: (payload) => {
-          delete remoteSnapshotsRef.current[payload.playerId];
-          setMpRoomPlayers(payload.players);
-        },
-        onDisconnected: () => {
-          setMpStatus('Disconnected from multiplayer server.');
-        },
-      });
-    },
-    []
-  );
-
-  const mpSelfIdRef = useRef<string | null>(null);
+          setMpRoomPlayers(res.players);
+        });
+      },
+      onDisconnected: () => {
+        setMpStatus('Disconnected from multiplayer server.');
+      },
+    });
+  }, []);
 
   const handleCreateRoom = useCallback(
     async (characterName: string) => {
       setMpBusy(true);
       setMpStatus(null);
       try {
-        await ensureSignalRConnected(mpSelfIdRef);
+        await ensureSignalRConnected();
         const res = await signalRRef.current!.createRoom(characterName);
         if (!res.success) {
           setMpStatus(res.error ?? 'Failed to create room.');
           return;
         }
         mpSelfIdRef.current = res.playerId ?? null;
+        mpCharNameRef.current = res.characterName ?? characterName;
+        mpRoomCodeRef.current = res.roomCode ?? null;
         setMpLocalPlayerId(res.playerId ?? null);
         setMpCharacterName(res.characterName ?? characterName);
         setMpRoomCode(res.roomCode ?? null);
         setMpRoomPlayers(res.players);
-      } catch {
-        setMpStatus('Could not reach multiplayer server. Check backend URL.');
+      } catch (err) {
+        setMpStatus(
+          err instanceof Error && err.message.includes('VITE_MULTIPLAYER_URL')
+            ? err.message
+            : 'Could not reach multiplayer server. Check backend URL.'
+        );
       } finally {
         setMpBusy(false);
       }
@@ -250,13 +290,15 @@ export function App() {
       setMpBusy(true);
       setMpStatus(null);
       try {
-        await ensureSignalRConnected(mpSelfIdRef);
+        await ensureSignalRConnected();
         const res = await signalRRef.current!.joinRoom(characterName, roomCode);
         if (!res.success) {
           setMpStatus(res.error ?? 'Failed to join room.');
           return;
         }
         mpSelfIdRef.current = res.playerId ?? null;
+        mpCharNameRef.current = res.characterName ?? characterName;
+        mpRoomCodeRef.current = res.roomCode ?? null;
         setMpLocalPlayerId(res.playerId ?? null);
         setMpCharacterName(res.characterName ?? characterName);
         setMpRoomCode(res.roomCode ?? null);
@@ -272,8 +314,12 @@ export function App() {
           setIsMultiplayerActive(true);
           setIsLobbyOpen(false);
         }
-      } catch {
-        setMpStatus('Could not reach multiplayer server. Check backend URL.');
+      } catch (err) {
+        setMpStatus(
+          err instanceof Error && err.message.includes('VITE_MULTIPLAYER_URL')
+            ? err.message
+            : 'Could not reach multiplayer server. Check backend URL.'
+        );
       } finally {
         setMpBusy(false);
       }
@@ -283,7 +329,12 @@ export function App() {
 
   const handlePlaySolo = useCallback(() => {
     void signalRRef.current?.disconnect();
+    mpSelfIdRef.current = null;
+    mpCharNameRef.current = null;
+    mpRoomCodeRef.current = null;
+    remoteSnapshotsRef.current = {};
     setIsMultiplayerActive(false);
+    setMpConnectionStatus('disconnected');
     setMpRoomCode(null);
     setMpRoomPlayers([]);
     setIsLobbyOpen(false);
@@ -813,6 +864,7 @@ export function App() {
         loadout={cardLoadout}
         cooldowns={cardCooldowns}
         onActivateSlotCard={handleActivateCard}
+        multiplayerStatus={isMultiplayerActive ? mpConnectionStatus : null}
         onRevive={handleRevive}
       />
       <RaidEncounterHUD

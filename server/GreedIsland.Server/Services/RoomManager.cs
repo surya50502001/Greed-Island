@@ -89,6 +89,50 @@ public sealed class RoomManager
         }
     }
 
+    public (bool Success, string? Error, GameRoom? Room) ReconnectPlayer(
+        PlayerSession session,
+        string? rawCode)
+    {
+        var code = (rawCode ?? string.Empty).Trim().ToUpperInvariant();
+        if (code.Length != 6 || !_rooms.TryGetValue(code, out var room))
+        {
+            return (false, "Room no longer exists.", null);
+        }
+
+        lock (room.SyncRoot)
+        {
+            if (room.Players.TryGetValue(session.PlayerId, out var existingSnap))
+            {
+                existingSnap.TimestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                session.RoomCode = room.RoomCode;
+                room.IsReady = room.Players.Count >= room.MaxPlayers;
+                return (true, null, room);
+            }
+
+            if (room.Players.Count >= room.MaxPlayers)
+            {
+                return (false, "Room is already full.", null);
+            }
+
+            var slotIndex = Math.Min(room.Players.Count, SharedPlazaSpawns.Length - 1);
+            var spawn = SharedPlazaSpawns[slotIndex];
+            room.Players[session.PlayerId] = new PlayerSnapshot
+            {
+                PlayerId = session.PlayerId,
+                CharacterName = session.CharacterName,
+                X = spawn.X,
+                Y = spawn.Y,
+                Z = spawn.Z,
+                Yaw = spawn.Yaw,
+                LocomotionState = "Idle",
+                TimestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+            session.RoomCode = room.RoomCode;
+            room.IsReady = room.Players.Count >= room.MaxPlayers;
+            return (true, null, room);
+        }
+    }
+
     public GameRoom? GetRoom(string roomCode) =>
         _rooms.TryGetValue(roomCode.Trim().ToUpperInvariant(), out var room) ? room : null;
 

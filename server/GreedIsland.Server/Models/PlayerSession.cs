@@ -7,4 +7,5 @@ public sealed class PlayerSession
     public required string CharacterName { get; init; }
     public string? RoomCode { get; set; }
     public DateTimeOffset ConnectedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    public long LastMovementAcceptedMs { get; set; }
 }
