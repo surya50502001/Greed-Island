@@ -301,8 +301,9 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
                 width: `${JOYSTICK_RADIUS * 2 + 16}px`,
                 height: `${JOYSTICK_RADIUS * 2 + 16}px`,
                 borderRadius: '50%',
-                background: 'rgba(15, 23, 42, 0.45)',
-                border: '1.5px solid rgba(255, 255, 255, 0.22)',
+                background: 'rgba(15, 23, 42, 0.52)',
+                border: '1.5px solid rgba(255, 255, 255, 0.28)',
+                boxShadow: 'inset 0 0 18px rgba(0,0,0,0.45)',
                 backdropFilter: 'blur(6px)',
                 pointerEvents: 'auto',
                 touchAction: 'none',
@@ -311,6 +312,10 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
                 justifyContent: 'center',
               }}
             >
+              <span style={{ position: 'absolute', top: '6px', fontSize: '10px', color: 'rgba(226,232,240,0.65)', pointerEvents: 'none' }}>⌃</span>
+              <span style={{ position: 'absolute', bottom: '6px', fontSize: '10px', color: 'rgba(226,232,240,0.65)', pointerEvents: 'none' }}>⌄</span>
+              <span style={{ position: 'absolute', left: '8px', fontSize: '10px', color: 'rgba(226,232,240,0.65)', pointerEvents: 'none' }}>‹</span>
+              <span style={{ position: 'absolute', right: '8px', fontSize: '10px', color: 'rgba(226,232,240,0.65)', pointerEvents: 'none' }}>›</span>
               <div
                 style={{
                   width: '48px',

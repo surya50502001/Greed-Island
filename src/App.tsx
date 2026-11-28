@@ -946,6 +946,7 @@ export function App() {
         cooldowns={cardCooldowns}
         onActivateSlotCard={handleActivateCard}
         multiplayerStatus={isMultiplayerActive ? mpConnectionStatus : null}
+        onlinePlayerCount={isMultiplayerActive ? Math.max(1, mpRoomPlayers.length) : null}
         onRevive={handleRevive}
       />
       <RaidEncounterHUD

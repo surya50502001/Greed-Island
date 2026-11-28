@@ -32,6 +32,7 @@ interface HUDProps {
   cooldowns?: CardCooldownMap;
   onActivateSlotCard?: (cardId: AnyCardId) => void;
   multiplayerStatus?: ConnectionStatus | null;
+  onlinePlayerCount?: number | null;
   onRevive: () => void;
 }
 
@@ -54,6 +55,7 @@ export const HUD: React.FC<HUDProps> = ({
   cooldowns = {},
   onActivateSlotCard,
   multiplayerStatus = null,
+  onlinePlayerCount = null,
   onRevive,
 }) => {
   const isInvisible = invisTimer > 0;
@@ -85,16 +87,17 @@ export const HUD: React.FC<HUDProps> = ({
           gap: '10px',
         }}
       >
-        {/* Player Health Bar (positioned cleanly below the top-left MiniMap) */}
+        {/* Player Health Bar (positioned cleanly below the circular top-left MiniMap) */}
         <div
           style={{
             alignSelf: 'flex-start',
-            marginTop: hideKeyboardHints ? '124px' : '152px',
-            width: hideKeyboardHints ? '138px' : '168px',
-            padding: '6px 10px',
-            borderRadius: '10px',
-            background: 'rgba(11, 14, 21, 0.86)',
-            border: '1px solid rgba(212, 175, 55, 0.3)',
+            marginTop: hideKeyboardHints ? '114px' : '142px',
+            width: hideKeyboardHints ? '118px' : '156px',
+            padding: '5px 9px',
+            borderRadius: '8px',
+            background: 'rgba(11, 14, 21, 0.9)',
+            border: '1.5px solid rgba(212, 175, 55, 0.45)',
+            boxShadow: '0 4px 14px rgba(0,0,0,0.45)',
             backdropFilter: 'blur(8px)',
             display: 'flex',
             flexDirection: 'column',
@@ -158,7 +161,7 @@ export const HUD: React.FC<HUDProps> = ({
               }}
             >
               {multiplayerStatus === 'connected'
-                ? '🟢 Online'
+                ? `🟢 Online${onlinePlayerCount !== null ? ` · 👤 ${onlinePlayerCount}` : ''}`
                 : multiplayerStatus === 'reconnecting'
                   ? '🟡 Reconnecting...'
                   : multiplayerStatus === 'connecting'
@@ -472,21 +475,22 @@ export const HUD: React.FC<HUDProps> = ({
                   onContextMenu={(e) => e.preventDefault()}
                   onClick={() => cardId && cd <= 0 && onActivateSlotCard?.(cardId)}
                   style={{
-                    minWidth: hideKeyboardHints ? '58px' : '82px',
-                    minHeight: hideKeyboardHints ? '48px' : undefined,
+                    minWidth: hideKeyboardHints ? '62px' : '82px',
+                    minHeight: hideKeyboardHints ? '54px' : '56px',
                     padding: hideKeyboardHints ? '6px 8px' : '6px 10px',
                     borderRadius: '10px',
                     border: `1.5px solid ${
                       isCardActive
-                        ? '#4ade80'
+                        ? '#f59e0b'
                         : cardId
-                          ? 'rgba(148, 163, 184, 0.45)'
-                          : 'rgba(148, 163, 184, 0.2)'
+                          ? 'rgba(212, 175, 55, 0.45)'
+                          : 'rgba(148, 163, 184, 0.24)'
                     }`,
                     background: isCardActive
-                      ? 'rgba(20, 83, 45, 0.78)'
-                      : 'rgba(15, 23, 42, 0.78)',
-                    color: cardId ? '#f8fafc' : '#64748b',
+                      ? 'rgba(120, 53, 15, 0.72)'
+                      : 'rgba(11, 14, 21, 0.88)',
+                    boxShadow: isCardActive ? '0 0 14px rgba(245, 158, 11, 0.35)' : '0 4px 12px rgba(0,0,0,0.45)',
+                    color: cardId ? '#fef3c7' : '#64748b',
                     fontSize: hideKeyboardHints ? '10px' : '11px',
                     fontWeight: 700,
                     cursor: cardId && cd <= 0 ? 'pointer' : 'default',
@@ -500,7 +504,18 @@ export const HUD: React.FC<HUDProps> = ({
                     touchAction: 'manipulation',
                   }}
                 >
-                  <span style={{ fontSize: '9px', color: '#94a3b8' }}>
+                  <span style={{ fontSize: '15px', lineHeight: 1 }}>
+                    {cardId === 'weapon'
+                      ? '⚔️'
+                      : cardId === 'flight'
+                        ? '🪽'
+                        : cardId === 'invisibility'
+                          ? '👁️'
+                          : cardId
+                            ? '✦'
+                            : '+'}
+                  </span>
+                  <span style={{ fontSize: '9px', color: cardId ? '#e2c275' : '#475569' }}>
                     {hideKeyboardHints ? '' : `[${idx + 1}] `}
                     {entry ? `Lv.${entry.level}` : ''}
                   </span>
